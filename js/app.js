@@ -5,7 +5,7 @@ import { requestLedgerUpdate, requestTaskFollowUp, setLedgerNotifier } from './l
 import { setTaskHook } from './views/forms.js';
 import { initSheet, toast } from './ui.js';
 import { renderCalendar } from './views/calendar.js';
-import { renderCompta, pendingInbox } from './views/compta.js';
+import { renderCompta, pendingInbox, autoInbox } from './views/compta.js';
 import { renderTodo, openTasks } from './views/todo.js';
 import { renderDiscussions } from './views/discussions.js';
 import { renderJuridique, dueDeadlines } from './views/juridique.js';
@@ -65,7 +65,7 @@ function badges() {
     if (!b) { b = document.createElement('span'); b.className = 'count'; a.appendChild(b); }
     b.textContent = n > 99 ? '99+' : String(n);
   };
-  set('compta', pendingInbox().length);
+  set('compta', pendingInbox().length + autoInbox().length);
   set('planning', db().inbox.filter((m) => m.kind === 'demande' && m.status !== 'traite').length);
   const today = new Date().toISOString().slice(0, 10);
   set('todo', openTasks().filter((t) => t.kind === 'decision' || (t.date && t.date < today)).length);

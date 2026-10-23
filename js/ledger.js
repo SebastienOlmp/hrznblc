@@ -5,7 +5,7 @@
 import { db } from './store.js';
 
 const QUEUES = {
-  ledger: { trigger: 'trig_0132fvLHYPUEWAh5pcMvpHEa', delay: 45000, prefix: 'Changements dans l’appli', reasons: new Set(), timer: null },
+  ledger: { trigger: 'trig_01DEEL4ogqMDLTGsjxKa3xxA', delay: 45000, prefix: 'Changements dans l’appli', reasons: new Set(), timer: null },
   tasks: { trigger: 'trig_017YY4BSkbbfYv8vTrGHCput', delay: 20000, prefix: 'Réponses aux tâches', reasons: new Set(), timer: null },
   docs: { trigger: 'trig_01L8icahbpXr8JK3AbWYF4G4', delay: 15000, prefix: 'Documents envoyés', reasons: new Set(), timer: null },
 };

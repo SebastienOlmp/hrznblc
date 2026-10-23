@@ -10,6 +10,8 @@ import { ledgerStatus, fire } from '../ledger.js';
 const state = { year: new Date().getFullYear(), tab: 'synthese', account: null, month: null };
 
 export const pendingInbox = () => db().inbox.filter((x) => x.status === 'a_valider' && x.proposal);
+/** Écritures passées seules par Claude (facture certaine), pas encore vues. */
+export const autoInbox = () => db().inbox.filter((x) => x.status === 'auto' && !x.seen).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
 /** Chiffres du classeur maître pour l'exercice affiché, ou null si le classeur ne couvre pas cette année. */
 function ledgerFor(year) {
@@ -50,7 +52,8 @@ export function renderCompta(root) {
     </div>`;
   }
 
-  const tabs = [['synthese', 'Synthèse'], ...(L ? [['journal', 'Journal']] : []), ['valider', `À valider${pending.length ? ` (${pending.length})` : ''}`], ['depenses', 'Dépenses'], ['pieces', 'Justificatifs'], ['claude', 'Chat Claude']];
+  const nv = pending.length + autoInbox().length;
+  const tabs = [['synthese', 'Synthèse'], ...(L ? [['journal', 'Journal']] : []), ['valider', `À valider${nv ? ` (${nv})` : ''}`], ['depenses', 'Dépenses'], ['pieces', 'Justificatifs'], ['claude', 'Chat Claude']];
   root.innerHTML = `
     <header class="top">
       <div><p class="eyebrow">Compta</p><h1>Exercice ${year}</h1></div>
@@ -75,7 +78,7 @@ export function renderCompta(root) {
 
   root.querySelector('#compta-year').onchange = (e) => { state.year = Number(e.target.value); renderCompta(root); };
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tab],[data-month],[data-exp],[data-act],[data-inbox],[data-ignore],[data-acc]');
+    const el = e.target.closest('[data-tab],[data-month],[data-exp],[data-act],[data-inbox],[data-ignore],[data-acc],[data-seen]');
     if (!el) return;
     if (el.dataset.tab) { state.tab = el.dataset.tab; state.account = null; renderCompta(root); }
     else if (el.dataset.month) {
@@ -88,6 +91,10 @@ export function renderCompta(root) {
     else if (el.dataset.acc !== undefined) { state.tab = 'journal'; state.account = el.dataset.acc || null; renderCompta(root); window.scrollTo(0, 0); }
     else if (el.dataset.exp) expenseForm(db().expenses.find((x) => x.id === el.dataset.exp));
     else if (el.dataset.inbox) validateInbox(el.dataset.inbox);
+    else if (el.dataset.seen) {
+      const item = db().inbox.find((x) => x.id === el.dataset.seen);
+      if (item) upsert('inbox', { ...item, seen: true });
+    }
     else if (el.dataset.ignore) {
       const item = db().inbox.find((x) => x.id === el.dataset.ignore);
       if (item) { upsert('inbox', { ...item, status: 'ignore' }); toast('Ignoré'); }
@@ -287,11 +294,34 @@ function synthese(year, months, totals, expenses) {
   `;
 }
 
+function autoPosted() {
+  const list = autoInbox();
+  if (!list.length) return '';
+  return `<h2 class="section-title">Passées automatiquement par Claude (${list.length})</h2>
+  <div class="list">${list.map((x) => {
+    const e = db().expenses.find((y) => y.id === x.expenseId);
+    const p = e || x.proposal || {};
+    return `<div class="item static">
+      <span class="item-main">
+        <strong>${esc(p.label || x.subject)}</strong>
+        <small>${fmtDate(p.date || x.date, { day: 'numeric', month: 'short', year: 'numeric' })} · ${esc(x.from || p.supplier || '')} · <code>${esc(p.account || '?')}</code> ${esc(accountLabel(p.account || ''))}${e?.ledgerEntry ? ` · classeur n° ${e.ledgerEntry}` : ''}</small>
+        ${x.gmailUrl ? `<a class="small-link" href="${esc(x.gmailUrl)}" target="_blank" rel="noopener">Voir le mail</a>` : ''}
+      </span>
+      <span class="item-side">
+        <span>${money(p.amount)}</span>
+        <span class="btn-row">${e ? `<button class="btn small" data-exp="${e.id}">Corriger</button>` : ''}<button class="btn small primary" data-seen="${x.id}">Vu</button></span>
+      </span>
+    </div>`;
+  }).join('')}</div>
+  <p class="hint">Corriger ouvre la dépense. Si l’écriture est déjà au classeur, Claude ne la modifie pas : il vous proposera une contre-passation.</p>`;
+}
+
 function valider(pending) {
+  const auto = autoPosted();
   if (!pending.length) {
-    return empty('Rien à valider. Les factures et mails détectés chaque jour dans votre boîte apparaîtront ici avec une écriture pré-remplie.');
+    return auto + empty('Rien à valider. Les factures et mails détectés chaque jour dans votre boîte apparaîtront ici avec une écriture pré-remplie.');
   }
-  return `<div class="list">${pending.map((x) => `
+  return auto + `<h2 class="section-title">À valider (${pending.length})</h2><div class="list">${pending.map((x) => `
     <div class="item static">
       <span class="item-main">
         <strong>${esc(x.proposal.label || x.subject)}</strong>
