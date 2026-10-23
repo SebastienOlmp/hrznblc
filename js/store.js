@@ -82,6 +82,28 @@ const defaultSettings = () => ({
   winterEnd: '04-30',
   winterMin: 6,
   bookingMarkup: 18, // % ajouté à la grille pour Booking
+  // Réservations : mail à la conciergerie préparé en brouillon à chaque réservation confirmée
+  autoMailOn: true,
+  autoMailFrom: 'ficherasebastien@gmail.com',
+  autoMailTo: 'concierge-services@orange.fr',
+  autoMailCc: 'regine.fichera@optimhome.com, regine.fichera@gmail.com',
+  autoMailTemplate: `Objet : Réservation Horizon Blanc 403 du {arrivee} au {depart}
+
+Bonjour Frédéric, bonjour Sylviane,
+
+J'espère que vous allez bien. Pour information, une réservation vient d'être confirmée pour l'appartement 403 de l'Horizon Blanc :
+- arrivée : {arrivee}, à partir de 16h (accueil ECO au point de rendez-vous)
+- départ : {depart} au matin
+- voyageurs : {voyageurs}
+- réservé via : {canal}
+- ménage : {menage}
+
+Merci de me confirmer la bonne prise en compte.
+
+Bien cordialement,
+Sébastien Fichera`,
+  // Calendriers iCal des annonces (lien « Exporter le calendrier » de chaque plateforme)
+  icalAirbnb: '', icalBooking: '', icalChalet: '',
   // Boîtes mail suivies par la tâche planifiée (tri, comptabilisation, archivage)
   mailboxes: [], // [{ address, role, linked: false }]
   // Emprunt (échéancier capital / intérêts)

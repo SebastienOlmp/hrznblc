@@ -24,6 +24,7 @@ export function reservationForm(existing, preset = {}) {
   const guest = r.guestId ? byId('contacts', r.guestId) : null;
   const voyageurs = db().contacts.filter((c) => c.kind === 'voyageur');
   const body = `
+    ${r.source === 'mail' || r.source === 'ical' ? `<p class="calc warn">Réservation repérée automatiquement (${r.source === 'ical' ? 'calendrier' : 'mail'}). Vérifiez et complétez les montants.${r.conciergeDraft ? ' Brouillon pour la conciergerie créé dans Gmail.' : ''}</p>` : ''}
     ${field({ name: 'guestName', label: 'Voyageur', value: guest?.name || r.guestName || '', required: true, placeholder: 'Nom du voyageur', attrs: 'list="guest-list" autocapitalize="words"' })}
     <datalist id="guest-list">${voyageurs.map((c) => `<option value="${esc(c.name)}">`).join('')}</datalist>
     ${row(

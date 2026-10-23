@@ -80,6 +80,20 @@ export function renderReglages(root) {
       ${row(field({ name: 'winterStart', label: 'Début hiver (MM-JJ)', value: s.winterStart, attrs: 'pattern="\\d{2}-\\d{2}"' }), field({ name: 'winterEnd', label: 'Fin hiver (MM-JJ)', value: s.winterEnd, attrs: 'pattern="\\d{2}-\\d{2}"' }))}
     `, 'Montants réellement payés par séjour. Le tarif ménage n’est pas confirmé par écrit et la grille manque dans votre exemplaire du contrat.')}
 
+    ${section('resa', 'Réservations confirmées : mail à la conciergerie', `
+      ${field({ name: 'autoMailOn', label: 'Préparer automatiquement le mail en brouillon', type: 'checkbox', value: s.autoMailOn })}
+      ${field({ name: 'autoMailFrom', label: 'Boîte où créer le brouillon', type: 'email', value: s.autoMailFrom })}
+      ${field({ name: 'autoMailTo', label: 'Destinataire', value: s.autoMailTo })}
+      ${field({ name: 'autoMailCc', label: 'Copie (séparées par des virgules)', value: s.autoMailCc })}
+      ${field({ name: 'autoMailTemplate', label: 'Modèle du mail', type: 'textarea', rows: 14, value: s.autoMailTemplate })}
+    `, 'Repères remplacés automatiquement : {arrivee}, {depart}, {voyageurs}, {canal}, {menage}, {nom}. Le mail n’est jamais envoyé : il est créé en brouillon et vous recevez une notification pour le valider.')}
+
+    ${section('ical', 'Calendriers des annonces (iCal)', `
+      ${field({ name: 'icalAirbnb', label: 'Airbnb : lien d’export du calendrier', type: 'url', value: s.icalAirbnb, placeholder: 'https://www.airbnb.fr/calendar/ical/….ics' })}
+      ${field({ name: 'icalBooking', label: 'Booking : lien d’export du calendrier', type: 'url', value: s.icalBooking })}
+      ${field({ name: 'icalChalet', label: 'Chalet-Montagne : lien d’export du calendrier', type: 'url', value: s.icalChalet })}
+    `, 'Ces liens permettent à Claude de repérer les nouvelles réservations même sans mail. Ils ne fonctionnent qu’une fois ces sites autorisés dans le réseau de l’environnement Claude (voir les explications de Claude).')}
+
     ${section('prix', 'Tarification', field({ name: 'bookingMarkup', label: 'Majoration Booking (%)', type: 'money', value: s.bookingMarkup }))}
 
     ${section('emprunt', 'Emprunt', `
@@ -102,6 +116,7 @@ export function renderReglages(root) {
     e.preventDefault();
     const form = e.target.closest('[data-form]');
     const v = Object.fromEntries(new FormData(form));
+    form.querySelectorAll('input[type=checkbox]').forEach((c) => { v[c.name] = c.checked; });
     const money = ['welcomeEco', 'touchUp', 'fullCleanOwner', 'fullCleanGuest', 'deposit', 'bookingMarkup', 'loanAmount', 'loanInsurance'];
     for (const k of Object.keys(v)) if (money.includes(k) || k === 'capacity' || k === 'winterMin' || k === 'loanMonths') v[k] = v[k] === '' ? '' : num(v[k]);
     updateSettings(v);

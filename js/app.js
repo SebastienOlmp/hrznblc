@@ -66,6 +66,7 @@ function badges() {
     b.textContent = n > 99 ? '99+' : String(n);
   };
   set('compta', pendingInbox().length);
+  set('planning', db().inbox.filter((m) => m.kind === 'demande' && m.status !== 'traite').length);
   const today = new Date().toISOString().slice(0, 10);
   set('todo', openTasks().filter((t) => t.kind === 'decision' || (t.date && t.date < today)).length);
   set('plus', dueDeadlines(30).length);

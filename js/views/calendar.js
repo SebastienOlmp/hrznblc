@@ -1,5 +1,5 @@
 import { esc, iso, today, addDays, MONTHS, cap, fmtDate, nightsBetween, plural } from '../utils.js';
-import { db, settings, isActive, sortedReservations, yearStats, currentStay, upcoming, channelSlug, CHANNELS } from '../store.js';
+import { db, settings, isActive, sortedReservations, yearStats, currentStay, upcoming, channelSlug, CHANNELS, upsert } from '../store.js';
 import { reservationForm, reservationRow, guestName } from './forms.js';
 import { empty } from '../ui.js';
 
@@ -26,6 +26,28 @@ function hero() {
     </button>`;
   }
   return '<div class="hero-card free"><small>Libre en ce moment</small><strong>Aucune réservation à venir</strong><span>Ajoutez la première avec le bouton ci-dessous.</span></div>';
+}
+
+const HOST_INBOX = { Airbnb: 'https://www.airbnb.fr/hosting/reservations', Booking: 'https://admin.booking.com/', 'Chalet-Montagne': 'https://www.chalet-montagne.com/' };
+
+/** Demandes de réservation repérées dans les mails, en attente de votre réponse sur la plateforme. */
+function requests() {
+  const list = db().inbox.filter((m) => m.kind === 'demande' && m.status !== 'traite')
+    .sort((a, b) => (a.expiresAt || a.date || '').localeCompare(b.expiresAt || b.date || ''));
+  if (!list.length) return '';
+  return `<section class="requests">
+    <h2 class="section-title">Demandes de réservation à traiter (${list.length})</h2>
+    <div class="list">${list.map((m) => `
+      <div class="item static">
+        <span class="item-main"><strong>${esc(m.subject || 'Demande de réservation')}</strong>
+          <small>${esc(m.summary || '')}${m.expiresAt ? ` · à accepter avant le ${fmtDate(m.expiresAt.slice(0, 10), { day: 'numeric', month: 'short' })} ${esc(m.expiresAt.slice(11, 16))}` : ''}</small>
+          <span class="btn-row wrap">
+            <a class="btn small primary" href="${esc(m.platformUrl || HOST_INBOX[m.platform] || HOST_INBOX.Airbnb)}" target="_blank" rel="noopener">Répondre sur ${esc(m.platform || 'la plateforme')}</a>
+            ${m.gmailUrl ? `<a class="btn small" href="${esc(m.gmailUrl)}" target="_blank" rel="noopener">Voir le mail</a>` : ''}
+            <button class="btn small" data-req-done="${m.id}">Traitée</button>
+          </span></span>
+      </div>`).join('')}</div>
+  </section>`;
 }
 
 export function renderCalendar(root) {
@@ -79,6 +101,7 @@ export function renderCalendar(root) {
       <div><p class="eyebrow">${esc(settings().name)}</p><h1>Planning</h1></div>
       <button class="btn primary" data-act="new">+ Réservation</button>
     </header>
+    ${requests()}
     ${hero()}
     <header class="top sub">
       <h2>${cap(MONTHS[m])} ${y}</h2>
@@ -107,8 +130,13 @@ export function renderCalendar(root) {
   `;
 
   root.onclick = (e) => {
-    const el = e.target.closest('[data-nav],[data-res],[data-day],[data-act]');
+    const el = e.target.closest('[data-nav],[data-res],[data-day],[data-act],[data-req-done]');
     if (!el) return;
+    if (el.dataset.reqDone) {
+      const m = db().inbox.find((x) => x.id === el.dataset.reqDone);
+      if (m) upsert('inbox', { ...m, status: 'traite' });
+      return;
+    }
     if (el.dataset.nav !== undefined) {
       const step = Number(el.dataset.nav);
       if (step === 0) { state.y = null; } else {
