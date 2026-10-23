@@ -103,6 +103,7 @@ const empty = () => ({
   inbox: [], // éléments détectés dans les mails par la tâche planifiée, à valider
   bank: [], // lignes de relevé importées
   pricing: [], // grille tarifaire : une ligne par semaine
+  chat: [], // fil de discussion Compta (messages, pièces jointes)
   ledgerSummary: {}, // chiffres extraits du classeur : soldes, mois, lignes du journal
   ledger: {}, // état du classeur Excel maître (lecture seule, tenu par Claude)
   market: {}, // veille marché écrite par la tâche planifiée : { updatedAt, summary, comparables: [] }
@@ -198,6 +199,11 @@ export async function connect(onFirstData) {
       () => { loaded(c); onError('Synchronisation interrompue : rechargez la page.'); },
     );
   }
+  // Fil de discussion Compta (privé : zone ledger)
+  ns.collection('ledger/chat/messages').onSnapshot(
+    (snap) => { data.chat = snap.docs.map((d) => ({ ...d.data(), id: d.id })).sort((a, b) => (a.at || '').localeCompare(b.at || '')); notify(); },
+    () => {},
+  );
   for (const [k, path] of Object.entries(CONFIG_DOCS)) {
     ns.doc(path).onSnapshot(
       (snap) => {
@@ -247,6 +253,18 @@ export function remove(coll, id) {
 }
 
 export const byId = (coll, id) => data[coll].find((x) => x.id === id);
+
+/** Ajoute ou met à jour un message du fil Compta. */
+export function saveChatMessage(msg) {
+  if (!msg.id) msg.id = uid();
+  const list = data.chat || (data.chat = []);
+  const i = list.findIndex((x) => x.id === msg.id);
+  if (i >= 0) list[i] = msg; else list.push(msg);
+  notify();
+  const body = clean(msg);
+  persist(`ledger/chat/messages/${msg.id}`, () => cloud.collection('ledger/chat/messages').doc(msg.id).set(body));
+  return msg;
+}
 
 export function updateSettings(patch) {
   data.settings = { ...data.settings, ...patch };

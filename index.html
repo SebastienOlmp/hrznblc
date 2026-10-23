@@ -96,6 +96,23 @@ section { display: flex; flex-direction: column; gap: 8px; }
 .result-band small { color: var(--muted); font: 600 .72rem/1 var(--display); letter-spacing: .1em; text-transform: uppercase; }
 .result-band strong { font: 700 2rem/1.1 var(--display); font-variant-numeric: tabular-nums; }
 .result-band span { color: var(--muted); font-size: .9rem; }
+.scan-tile { display: flex; flex-direction: column; gap: 6px; }
+.scan-main { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+.scan-main svg { width: 34px; height: 34px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; }
+.scan-main span { display: flex; flex-direction: column; }
+.scan-main strong { font: 700 1.15rem/1.2 var(--display); }
+.scan-main small { opacity: .85; }
+.scan-alt { align-self: center; color: var(--accent); font-weight: 600; font-size: .9rem; cursor: pointer; padding: 4px; }
+.attach-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.attach { display: inline-flex; gap: 4px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); color: var(--ink); text-decoration: none; font-size: .82rem; max-width: 100%; overflow-wrap: anywhere; }
+.bubble.me .attach { background: rgb(255 255 255 / .2); color: inherit; }
+.note-box { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
+.note-box.claude { background: var(--accent-soft); }
+.note-box small { color: var(--muted); font-weight: 600; }
+.note-box p { margin: 4px 0 0; }
+.history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.history li { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 2px solid var(--line); }
+.history small { color: var(--muted); }
 .period-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .fig { display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: 10px; background: var(--surface-2); min-width: 0; }

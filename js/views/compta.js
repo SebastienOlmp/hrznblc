@@ -1,13 +1,12 @@
 // Onglet COMPTA : résultat net, dépenses, éléments détectés dans les mails à valider, assistant Claude.
 import { esc, money, money0, pct, fmtDate, MONTHS_SHORT, plural, today, num } from '../utils.js';
-import { db, upsert, yearStats, yearsWithData, EXPENSE_ACCOUNTS, accountLabel, isActive, resNet } from '../store.js';
+import { db, upsert, yearStats, yearsWithData, EXPENSE_ACCOUNTS, accountLabel, isActive, resNet, saveChatMessage } from '../store.js';
 import { expenseForm } from './forms.js';
-import { empty, saveFile, toast } from '../ui.js';
+import { empty, saveFile, toast, uploadFile, attachmentLinks } from '../ui.js';
 import { journalCSV } from '../compta.js';
 import { ledgerStatus, fire } from '../ledger.js';
 
 const state = { year: new Date().getFullYear(), tab: 'synthese', account: null, month: null };
-const chat = { turns: [], busy: false, ctl: null, proposals: {}, draft: '' };
 
 export const pendingInbox = () => db().inbox.filter((x) => x.status === 'a_valider' && x.proposal);
 
@@ -50,7 +49,7 @@ export function renderCompta(root) {
     </div>`;
   }
 
-  const tabs = [['synthese', 'Synthèse'], ...(L ? [['journal', 'Journal']] : []), ['valider', `À valider${pending.length ? ` (${pending.length})` : ''}`], ['depenses', 'Dépenses'], ['claude', 'Claude']];
+  const tabs = [['synthese', 'Synthèse'], ...(L ? [['journal', 'Journal']] : []), ['valider', `À valider${pending.length ? ` (${pending.length})` : ''}`], ['depenses', 'Dépenses'], ['pieces', 'Justificatifs'], ['claude', 'Chat Claude']];
   root.innerHTML = `
     <header class="top">
       <div><p class="eyebrow">Compta</p><h1>Exercice ${year}</h1></div>
@@ -58,6 +57,7 @@ export function renderCompta(root) {
     </header>
     ${band}
     ${statusLine()}
+    ${scanTile()}
     <div class="segmented">
       ${tabs.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
     </div>
@@ -68,11 +68,13 @@ export function renderCompta(root) {
   else if (tab === 'journal') body.innerHTML = journalView(L);
   else if (tab === 'valider') body.innerHTML = valider(pending);
   else if (tab === 'depenses') body.innerHTML = depenses(year, expenses);
+  else if (tab === 'pieces') body.innerHTML = justificatifs(year);
   else renderChat(body);
+  root.querySelectorAll('[data-scan]').forEach((inp) => inp.addEventListener('change', (e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) scanInvoice(f); }));
 
   root.querySelector('#compta-year').onchange = (e) => { state.year = Number(e.target.value); renderCompta(root); };
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tab],[data-month],[data-exp],[data-act],[data-inbox],[data-ignore],[data-prop],[data-acc]');
+    const el = e.target.closest('[data-tab],[data-month],[data-exp],[data-act],[data-inbox],[data-ignore],[data-acc]');
     if (!el) return;
     if (el.dataset.tab) { state.tab = el.dataset.tab; state.account = null; renderCompta(root); }
     else if (el.dataset.month) {
@@ -88,9 +90,6 @@ export function renderCompta(root) {
     else if (el.dataset.ignore) {
       const item = db().inbox.find((x) => x.id === el.dataset.ignore);
       if (item) { upsert('inbox', { ...item, status: 'ignore' }); toast('Ignoré'); }
-    } else if (el.dataset.prop) {
-      const pr = chat.proposals[el.dataset.prop];
-      if (pr) expenseForm(null, { ...pr, source: 'claude' }, () => { pr.done = true; renderCompta(root); });
     } else if (el.dataset.act === 'new-exp') expenseForm(null);
     else if (el.dataset.act === 'ledger-now') fire();
     else if (el.dataset.act === 'csv') {
@@ -325,25 +324,12 @@ function depenses(year, expenses) {
   `;
 }
 
-// ---------- Assistant Claude ----------
+// ---------- Scanner une facture ----------
 
 const ACCOUNTS_TXT = EXPENSE_ACCOUNTS.map(([c, l]) => `${c} ${l}`).join('; ');
 
-function context() {
-  const y = new Date().getFullYear();
-  const { totals } = yearStats(y);
-  const recent = [...db().expenses].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 25)
-    .map((e) => `${e.date} | ${e.label} | ${e.amount} € | ${e.account}${e.paidBy === 'regine' ? ' | avance Régine' : ''}`).join('\n');
-  return `Exercice ${y} : recettes nettes ${totals.net.toFixed(2)} €, charges ${totals.expenses.toFixed(2)} €, résultat avant amortissements ${totals.result.toFixed(2)} €, ${totals.nights} nuits louées.\nDernières dépenses :\n${recent || '(aucune)'}`;
-}
-
-const RULES = `Tu es l'assistant comptable de l'appli de gestion d'un meublé de tourisme (LMNP au réel simplifié, BIC, TVA non applicable, comptabilité d'engagement : la date de pièce rattache à l'exercice). Le propriétaire tient sa comptabilité lui-même. Réponds en français, de façon courte et factuelle, sans formules de politesse. Contredis-le s'il se trompe. Si tu n'es pas sûr d'une règle fiscale, dis-le.
-Comptes de charges et d'immobilisations disponibles : ${ACCOUNTS_TXT}. Un achat de bien durable de plus de 500 € HT va en immobilisation (2134 ou 2184), pas en charge. Une dépense avancée par Régine (la mère du propriétaire) se crédite en 467600.
-Quand l'utilisateur décrit une dépense à enregistrer, termine ta réponse par un bloc :
-\`\`\`depense
-{"label": "...", "amount": 0.00, "date": "AAAA-MM-JJ", "account": "606100", "supplier": "...", "piece": "", "why": "point à vérifier, ou chaîne vide"}
-\`\`\`
-Ne mets ce bloc que si une dépense doit être enregistrée.`;
+let samplePromise = null;
+const getSample = () => (samplePromise ||= Promise.resolve(window.claude?.use?.('sample')).catch(() => null));
 
 const INVOICE_PROMPT = `Voici la photo d'une facture ou d'un ticket pour un meublé de tourisme (LMNP, TVA non récupérable : on comptabilise le TTC).
 Comptes possibles : ${ACCOUNTS_TXT}.
@@ -351,64 +337,119 @@ Réponds uniquement par un objet JSON :
 {"label": "libellé court (fournisseur + objet + période)", "amount": montant TTC en nombre, "date": "AAAA-MM-JJ (date de la facture)", "account": "numéro de compte", "supplier": "fournisseur", "piece": "numéro de facture ou chaîne vide", "why": "ce qui est illisible ou douteux, ou chaîne vide", "readable": true}
 Si ce n'est pas une facture lisible, mets "readable": false et explique dans "why".`;
 
-function parseProposal(text) {
-  const m = text.match(/```depense\s*([\s\S]*?)```/);
-  if (!m) return { text, proposal: null };
+const validAccount = (a) => (EXPENSE_ACCOUNTS.some(([c]) => c === String(a)) ? String(a) : '615000');
+const isoOr = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d : today());
+
+/** Photo ou PDF de facture : archivage, lecture par Claude si c'est une image, puis formulaire pré-rempli. */
+export async function scanInvoice(file) {
+  toast('Archivage de la pièce…');
+  const att = await uploadFile(file);
+  if (!att) return;
+  const base = { attachments: [att], source: 'scan' };
+  const sample = await getSample();
+  const lim = sample ? await sample.limits().catch(() => null) : null;
+  if (!file.type.startsWith('image/') || !lim?.images) {
+    expenseForm(null, { ...base, label: file.name.replace(/\.[a-z0-9]+$/i, ''), why: 'Pièce archivée. Saisissez le montant : Claude contrôlera la pièce lors du report au classeur.' });
+    return;
+  }
+  toast('Lecture de la facture par Claude…');
   try {
-    return { text: text.replace(m[0], '').trim(), proposal: JSON.parse(m[1]) };
-  } catch {
-    return { text, proposal: null };
+    const p = await sample.json(INVOICE_PROMPT, { images: [file], cache: false });
+    if (!p || p.readable === false) {
+      expenseForm(null, { ...base, why: `Facture illisible pour Claude. ${p?.why || ''} Complétez à la main.` });
+      return;
+    }
+    expenseForm(null, {
+      ...base, label: String(p.label || ''), amount: num(p.amount), date: isoOr(p.date), account: validAccount(p.account),
+      supplier: String(p.supplier || ''), piece: String(p.piece || ''), why: p.why ? String(p.why) : 'Lue par Claude : vérifiez avant d’enregistrer.',
+    });
+  } catch (e) {
+    expenseForm(null, { ...base, why: `Lecture impossible (${ERRORS[e?.code] || 'réessayez plus tard'}). Complétez à la main, la pièce est archivée.` });
   }
 }
 
-function proposalCard(id, p) {
-  return `<div class="proposal ${p.done ? 'done' : ''}">
-    <div><strong>${esc(p.label)}</strong><small>${fmtDate(p.date, { day: 'numeric', month: 'short', year: 'numeric' })} · <code>${esc(p.account)}</code> ${esc(accountLabel(p.account))}</small>
-    ${p.why ? `<small class="warn-text">${esc(p.why)}</small>` : ''}</div>
-    <div class="item-side"><span>${money(p.amount)}</span>${p.done ? '<span class="badge">Enregistrée</span>' : `<button class="btn small primary" data-prop="${id}">Vérifier et enregistrer</button>`}</div>
+function scanTile() {
+  return `<div class="scan-tile">
+    <label class="scan-main">
+      <svg viewBox="0 0 24 24"><path d="M4 7h3l2-3h6l2 3h3v13H4z"/><circle cx="12" cy="13" r="4"/></svg>
+      <span><strong>Scanner une facture</strong><small>Photo : Claude la lit et prépare l’écriture</small></span>
+      <input type="file" accept="image/*" capture="environment" data-scan hidden>
+    </label>
+    <label class="scan-alt">Importer une photo ou un PDF<input type="file" accept="image/*,application/pdf" data-scan hidden></label>
   </div>`;
 }
 
-function renderChat(body) {
-  body.innerHTML = `
-    <div class="chat" id="chat-log">
-      ${chat.turns.length ? '' : `<div class="chat-hello">
-        <p><strong>Posez une question ou envoyez une facture.</strong></p>
-        <p class="hint">Exemples : « Où passe l’assurance emprunteur ? », « J’ai payé 89 € de linge chez Ikea le 3 novembre, avancé par Régine ». Une photo de facture donne une écriture pré-remplie à vérifier.</p>
-      </div>`}
-      ${chat.turns.map((t, i) => t.role === 'user'
-        ? `<div class="bubble me">${esc(t.display || t.content)}</div>`
-        : `<div class="bubble">${esc(t.display ?? t.content)}${t.proposalId ? proposalCard(t.proposalId, chat.proposals[t.proposalId]) : ''}</div>`).join('')}
-      ${chat.busy ? '<div class="bubble thinking" id="chat-live">Réflexion…</div>' : ''}
-    </div>
-    <form class="chat-form" id="chat-form">
-      <label class="btn icon-only" title="Envoyer une photo de facture" id="photo-label">
-        <svg viewBox="0 0 24 24"><path d="M4 7h3l2-3h6l2 3h3v13H4z"/><circle cx="12" cy="13" r="4"/></svg>
-        <input type="file" accept="image/jpeg,image/png,image/webp" id="chat-photo" hidden>
-      </label>
-      <textarea id="chat-input" rows="1" placeholder="Écrire à Claude…" ${chat.busy ? 'disabled' : ''}>${esc(chat.draft || '')}</textarea>
-      ${chat.busy ? '<button type="button" class="btn" id="chat-stop">Stop</button>' : '<button class="btn primary" type="submit">Envoyer</button>'}
-    </form>
-    <p class="hint" id="chat-note">Claude utilise votre compte claude.ai ; la première utilisation demande votre accord.</p>
+// ---------- Justificatifs ----------
+
+const pieceName = (e) => {
+  const d = e.date || '';
+  const ext = (e.attachments?.[0]?.type || '').includes('pdf') ? 'pdf' : 'jpg';
+  return `${e.piece || '—'} - ${d.slice(5, 7)}.${d.slice(2, 4)} ${String(e.label || '').toUpperCase()}.${ext}`;
+};
+
+function justificatifs(year) {
+  const y = String(year);
+  const withDocs = db().expenses.filter((e) => e.attachments?.length && e.date?.startsWith(y))
+    .sort((a, b) => (Number(a.ledgerEntry) || 1e9) - (Number(b.ledgerEntry) || 1e9) || a.date.localeCompare(b.date));
+  const missing = db().expenses.filter((e) => !e.attachments?.length && e.date?.startsWith(y));
+  const chatDocs = (db().chat || []).filter((m) => m.role === 'user' && m.attachments?.length && (m.at || '').startsWith(y));
+  return `
+    ${withDocs.length ? `<div class="list">${withDocs.map((e) => `
+      <div class="item static">
+        <span class="item-main"><strong>${esc(pieceName(e))}</strong>
+          <small>${e.ledgerEntry ? `Écriture n° ${e.ledgerEntry}` : 'Pas encore au classeur (numéro attribué au report)'} · ${money(e.amount)}</small>
+          <span class="attach-list">${attachmentLinks(e.attachments)}</span></span>
+        <button class="btn small" data-exp="${e.id}">Voir</button>
+      </div>`).join('')}</div>` : empty(`Aucun justificatif archivé pour ${year}.`)}
+    ${missing.length ? `<div class="card warn-card"><h3 class="card-title">Dépenses sans justificatif (${missing.length})</h3>
+      <div class="list">${missing.map((e) => `<button class="item" data-exp="${e.id}"><span class="item-main"><strong>${esc(e.label)}</strong><small>${fmtDate(e.date, { day: 'numeric', month: 'short' })} · ${money(e.amount)}</small></span></button>`).join('')}</div></div>` : ''}
+    ${chatDocs.length ? `<div class="card"><h3 class="card-title">Pièces envoyées dans le chat</h3>${chatDocs.map((m) => `<div class="attach-list"><small class="muted">${fmtDate(m.at.slice(0, 10), { day: 'numeric', month: 'short' })}</small> ${attachmentLinks(m.attachments)}</div>`).join('')}</div>` : ''}
+    <p class="hint">Les pièces sont numérotées comme dans l’onglet Factures du classeur (NNN - MM.AA OBJET) une fois l’écriture passée.</p>
   `;
-  const log = body.querySelector('#chat-log');
-  log.scrollTop = log.scrollHeight;
-  const form = body.querySelector('#chat-form');
-  const input = body.querySelector('#chat-input');
-  input.addEventListener('input', () => { chat.draft = input.value; });
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
-  body.querySelector('#chat-stop')?.addEventListener('click', () => chat.ctl?.abort());
-  form.addEventListener('submit', (e) => { e.preventDefault(); const v = input.value.trim(); if (v) send(body, v); });
-  body.querySelector('#chat-photo').addEventListener('change', (e) => { const f = e.target.files?.[0]; if (f) sendPhoto(body, f); });
-  getSample().then(async (s) => {
-    if (!s) { body.querySelector('#chat-note').textContent = 'Claude n’est pas disponible dans cette vue (ouvrez l’appli dans claude.ai).'; form.hidden = true; return; }
-    const lim = await s.limits().catch(() => null);
-    body.querySelector('#photo-label').hidden = !lim?.images;
-  });
 }
 
-let samplePromise = null;
-const getSample = () => (samplePromise ||= Promise.resolve(window.claude?.use?.('sample')).catch(() => null));
+// ---------- Discussion avec Claude ----------
+
+function context() {
+  const L = db().ledgerSummary || {};
+  const y = new Date().getFullYear();
+  const recent = [...db().expenses].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 20)
+    .map((e) => `${e.date} | ${e.label} | ${e.amount} € | ${e.account}${e.ledgerEntry ? ` | écr. ${e.ledgerEntry}` : ' | pas encore au classeur'}`).join('\n');
+  const lines = (L.lines || []).slice(-40).map((l) => `${l.no} ${l.journal} ${l.date} ${l.account} ${l.label} D${l.debit} C${l.credit}`).join('\n');
+  return `Classeur maître (exercice ${y}) : produits ${L.produits ?? '?'} €, charges ${L.charges ?? '?'} €, résultat avant amortissements ${L.result ?? '?'} €, amortissements prévus ${L.depreciation?.[String(y)] ?? '?'} €, trésorerie ${L.bank ?? '?'} €, capital restant dû ${L.loanOutstanding ?? '?'} €, compte exploitant ${L.ownerAccount ?? '?'} €, dû à Régine ${L.owedToRegine ?? '?'} €.
+Dernières lignes du journal :
+${lines || '(aucune)'}
+Dernières dépenses saisies dans l'appli :
+${recent || '(aucune)'}`;
+}
+
+const RULES = `Tu es l'assistant comptable de l'appli de gestion du meublé de tourisme Horizon Blanc 403 (LMNP au réel simplifié, BIC, TVA non applicable, comptabilité d'engagement : la date de pièce rattache à l'exercice). Le classeur Excel maître fait foi ; l'appli y reporte automatiquement les écritures validées. Réponds en français, court et factuel, sans formules de politesse. Contredis l'utilisateur s'il se trompe. Si tu n'es pas sûr d'une règle fiscale, dis-le.
+Comptes de charges et d'immobilisations : ${ACCOUNTS_TXT}. Un bien durable de plus de 500 € HT va en immobilisation (213400 ou 21841x). Une dépense avancée par Régine (sa mère) : paidBy "regine" (467600). Payée par lui sur ses fonds personnels : paidBy "exploitant" (108000). Payée par le compte dédié : paidBy "banque".
+Quand une dépense doit être enregistrée (décrite, ou visible sur une photo de facture), termine ta réponse par :
+\`\`\`depense
+{"label": "...", "amount": 0.00, "date": "AAAA-MM-JJ", "account": "606100", "supplier": "...", "piece": "", "paidBy": "banque", "why": "point à vérifier, ou chaîne vide"}
+\`\`\`
+Quand l'utilisateur envoie une capture de relevé bancaire, termine par la liste des opérations lisibles :
+\`\`\`banque
+[{"date": "AAAA-MM-JJ", "label": "...", "amount": -12.34}]
+\`\`\`
+(montant négatif pour un débit). N'invente aucun chiffre illisible.`;
+
+function parseBlocks(text) {
+  const out = { text, proposal: null, bankLines: null };
+  const grab = (tag) => {
+    const m = out.text.match(new RegExp('```' + tag + '\\s*([\\s\\S]*?)```'));
+    if (!m) return null;
+    out.text = out.text.replace(m[0], '').trim();
+    try { return JSON.parse(m[1]); } catch { return null; }
+  };
+  out.proposal = grab('depense');
+  const bank = grab('banque');
+  out.bankLines = Array.isArray(bank) ? bank.filter((l) => /^\d{4}-\d{2}-\d{2}$/.test(l?.date || '') && Number(l?.amount)) : null;
+  return out;
+}
+
+const chat = { busy: false, ctl: null, draft: '', files: [], live: '' };
 
 const ERRORS = {
   not_granted: 'Accès à Claude refusé pour cette appli. Autorisez-le dans le menu Permissions de l’artifact.',
@@ -420,60 +461,132 @@ const ERRORS = {
   invalid_json: 'Réponse illisible. Réessayez avec une photo plus nette.',
 };
 
+function messageHtml(m) {
+  if (m.role === 'user') {
+    return `<div class="bubble me">${esc(m.text || '')}${m.attachments?.length ? `<div class="attach-list">${attachmentLinks(m.attachments)}</div>` : ''}</div>`;
+  }
+  const p = m.proposal;
+  const bank = m.bankLines;
+  return `<div class="bubble">${esc(m.text || '')}
+    ${p ? `<div class="proposal ${m.proposalDone ? 'done' : ''}">
+      <div><strong>${esc(p.label)}</strong><small>${fmtDate(p.date, { day: 'numeric', month: 'short', year: 'numeric' })} · <code>${esc(p.account)}</code> ${esc(accountLabel(p.account))}</small>${p.why ? `<small class="warn-text">${esc(p.why)}</small>` : ''}</div>
+      <div class="item-side"><span>${money(p.amount)}</span>${m.proposalDone ? '<span class="badge">Enregistrée</span>' : `<button class="btn small primary" data-prop="${m.id}">Vérifier et enregistrer</button>`}</div>
+    </div>` : ''}
+    ${bank?.length ? `<div class="proposal ${m.bankDone ? 'done' : ''}"><div><strong>${bank.length} opération${bank.length > 1 ? 's' : ''} lue${bank.length > 1 ? 's' : ''} sur le relevé</strong><small>${bank.slice(0, 4).map((l) => `${fmtDate(l.date, { day: '2-digit', month: '2-digit' })} ${esc(l.label)} ${money(l.amount)}`).join(' · ')}${bank.length > 4 ? '…' : ''}</small></div>
+      <div class="item-side">${m.bankDone ? '<span class="badge">Ajoutées</span>' : `<button class="btn small primary" data-bank="${m.id}">Ajouter au relevé</button>`}</div></div>` : ''}
+  </div>`;
+}
+
+export function renderChat(body) {
+  const msgs = (db().chat || []).slice(-80);
+  body.innerHTML = `
+    <div class="chat" id="chat-log">
+      ${msgs.length ? '' : `<div class="chat-hello">
+        <p><strong>Votre espace compta avec Claude.</strong></p>
+        <p class="hint">Posez une question, envoyez une facture, une capture de relevé bancaire ou tout justificatif. Exemples : « Où passe l’assurance emprunteur ? », « J’ai payé 89 € de linge chez Ikea le 3 novembre, avancé par Régine ». La conversation et les pièces sont conservées.</p>
+      </div>`}
+      ${msgs.map(messageHtml).join('')}
+      ${chat.busy ? `<div class="bubble ${chat.live ? '' : 'thinking'}" id="chat-live">${esc(chat.live || 'Réflexion…')}</div>` : ''}
+    </div>
+    ${chat.files.length ? `<div class="chips">${chat.files.map((f, i) => `<span class="chip">${f.type.startsWith('image/') ? '🖼' : '📄'} ${esc(f.name)} <button class="link" data-unfile="${i}" aria-label="Retirer">✕</button></span>`).join('')}</div>` : ''}
+    <form class="chat-form" id="chat-form">
+      <label class="btn icon-only" title="Joindre une photo, une capture ou un PDF">
+        <svg viewBox="0 0 24 24"><path d="M21 12.5 12.5 21a5 5 0 0 1-7-7L14 5.5a3.5 3.5 0 0 1 5 5L10.5 19a2 2 0 0 1-3-3L15 8.5"/></svg>
+        <input type="file" accept="image/*,application/pdf" multiple id="chat-files" hidden>
+      </label>
+      <textarea id="chat-input" rows="1" placeholder="Écrire à Claude… (dictée possible avec le micro du clavier)" ${chat.busy ? 'disabled' : ''}>${esc(chat.draft)}</textarea>
+      ${chat.busy ? '<button type="button" class="btn" id="chat-stop">Stop</button>' : '<button class="btn primary" type="submit">Envoyer</button>'}
+    </form>
+    <p class="hint" id="chat-note">Claude utilise votre compte claude.ai. Il lit les photos et captures ; les PDF sont archivés mais pas lus ici (Claude les lit lors du report au classeur).</p>
+  `;
+  const log = body.querySelector('#chat-log');
+  log.scrollTop = log.scrollHeight;
+  const form = body.querySelector('#chat-form');
+  const input = body.querySelector('#chat-input');
+  input.addEventListener('input', () => { chat.draft = input.value; });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
+  body.querySelector('#chat-stop')?.addEventListener('click', () => chat.ctl?.abort());
+  body.querySelector('#chat-files').addEventListener('change', (e) => { chat.files.push(...e.target.files); renderChat(body); });
+  form.addEventListener('submit', (e) => { e.preventDefault(); if (input.value.trim() || chat.files.length) send(body, input.value.trim()); });
+  body.onclick = (e) => {
+    const el = e.target.closest('[data-unfile],[data-prop],[data-bank]');
+    if (!el) return;
+    e.stopPropagation();
+    if (el.dataset.unfile) { chat.files.splice(Number(el.dataset.unfile), 1); renderChat(body); }
+    else if (el.dataset.prop) acceptProposal(el.dataset.prop);
+    else if (el.dataset.bank) acceptBank(el.dataset.bank);
+  };
+  getSample().then((s) => {
+    if (!s) { body.querySelector('#chat-note').textContent = 'Claude n’est pas disponible dans cette vue (ouvrez l’appli dans claude.ai).'; form.hidden = true; }
+  });
+}
+
+function acceptProposal(id) {
+  const m = (db().chat || []).find((x) => x.id === id);
+  if (!m?.proposal) return;
+  const p = m.proposal;
+  const src = (db().chat || []).filter((x) => x.role === 'user' && x.at <= m.at).pop();
+  expenseForm(null, {
+    label: String(p.label || ''), amount: num(p.amount), date: isoOr(p.date), account: validAccount(p.account),
+    supplier: String(p.supplier || ''), piece: String(p.piece || ''), paidBy: ['banque', 'regine', 'exploitant'].includes(p.paidBy) ? p.paidBy : 'banque',
+    why: p.why ? String(p.why) : '', source: 'claude', attachments: src?.attachments || [],
+  }, () => saveChatMessage({ ...m, proposalDone: true }));
+}
+
+function acceptBank(id) {
+  const m = (db().chat || []).find((x) => x.id === id);
+  if (!m?.bankLines?.length) return;
+  const known = new Set(db().bank.map((b) => b.hash));
+  let n = 0;
+  for (const l of m.bankLines) {
+    const line = { date: l.date, label: String(l.label || '').trim(), amount: Math.round(Number(l.amount) * 100) / 100 };
+    line.hash = `${line.date}|${line.amount.toFixed(2)}|${line.label.slice(0, 40)}`.replace(/[^\w|.-]/g, '');
+    if (known.has(line.hash)) continue;
+    known.add(line.hash);
+    upsert('bank', { ...line, id: `b${line.hash.replace(/[^A-Za-z0-9]/g, '').slice(0, 60)}`, match: null, source: 'capture' });
+    n++;
+  }
+  saveChatMessage({ ...m, bankDone: true });
+  toast(n ? `${n} ligne${n > 1 ? 's' : ''} ajoutée${n > 1 ? 's' : ''} dans Banque (à rapprocher)` : 'Ces lignes étaient déjà dans Banque.');
+}
+
 async function send(body, text) {
   const sample = await getSample();
   if (!sample) return;
-  chat.turns.push({ role: 'user', content: text });
+  const files = chat.files.splice(0);
+  chat.busy = true;
   chat.draft = '';
-  chat.busy = true;
+  chat.live = '';
   chat.ctl = new AbortController();
   renderChat(body);
-  const input = [{ role: 'user', content: `${RULES}\n\nContexte :\n${context()}` },
-    ...chat.turns.slice(-16).map((t) => ({ role: t.role, content: t.content }))];
-  try {
-    const { text: answer } = await sample(input, {
-      cache: false, signal: chat.ctl.signal,
-      onText: ({ text: t }) => { const live = body.querySelector('#chat-live'); if (live) { live.textContent = t; live.classList.remove('thinking'); } },
-    });
-    const { text: shown, proposal } = parseProposal(answer);
-    const turn = { role: 'assistant', content: answer, display: shown };
-    if (proposal) { const id = `p${Date.now()}`; chat.proposals[id] = proposal; turn.proposalId = id; }
-    chat.turns.push(turn);
-  } catch (e) {
-    if (e.code !== 'cancelled') chat.turns.push({ role: 'assistant', content: e.text || '…', display: `${e.text ? `${e.text}\n\n` : ''}⚠︎ ${ERRORS[e.code] || 'Réponse interrompue. Réessayez.'}` });
-    else if (e.text) chat.turns.push({ role: 'assistant', content: e.text });
-  } finally {
-    chat.busy = false;
-    renderChat(body);
+  const attachments = [];
+  for (const f of files) {
+    const a = await uploadFile(f);
+    if (a) attachments.push(a);
   }
-}
-
-async function sendPhoto(body, file) {
-  const sample = await getSample();
-  if (!sample) return;
-  chat.turns.push({ role: 'user', content: 'Photo de facture envoyée.', display: `📎 ${file.name}` });
-  chat.busy = true;
-  chat.ctl = new AbortController();
-  renderChat(body);
+  const images = files.filter((f) => f.type.startsWith('image/'));
+  const pdfs = files.filter((f) => !f.type.startsWith('image/')).map((f) => f.name);
+  const userText = text || (images.length ? 'Pièce jointe.' : 'Document joint.');
+  saveChatMessage({ role: 'user', text: userText, at: new Date().toISOString(), attachments });
+  const history = (db().chat || []).slice(-16).map((m) => ({
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: (m.text || '…') + (m.attachments?.length ? ` [${m.attachments.length} pièce(s) jointe(s)]` : ''),
+  }));
+  if (pdfs.length) history[history.length - 1].content += ` (PDF joint, non lisible ici : ${pdfs.join(', ')})`;
+  const input = [{ role: 'user', content: `${RULES}\n\nContexte :\n${context()}` }, ...history];
+  if (input[1]?.role === 'assistant') input.splice(1, 0, { role: 'user', content: '(suite de la conversation)' });
+  const lim = images.length ? await sample.limits().catch(() => null) : null;
   try {
-    const p = await sample.json(INVOICE_PROMPT, { images: [file], signal: chat.ctl.signal, cache: false });
-    if (!p || p.readable === false) {
-      chat.turns.push({ role: 'assistant', content: `Facture illisible. ${p?.why || ''}`.trim() });
-    } else {
-      const proposal = {
-        label: String(p.label || 'Facture'), amount: num(p.amount), date: /^\d{4}-\d{2}-\d{2}$/.test(p.date) ? p.date : today(),
-        account: EXPENSE_ACCOUNTS.some(([c]) => c === String(p.account)) ? String(p.account) : '615000',
-        supplier: String(p.supplier || ''), piece: String(p.piece || ''), why: String(p.why || ''),
-      };
-      const id = `p${Date.now()}`;
-      chat.proposals[id] = proposal;
-      const summary = `Facture lue : ${proposal.supplier || proposal.label}, ${money(proposal.amount)} au ${fmtDate(proposal.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Vérifiez puis enregistrez.`;
-      chat.turns.push({ role: 'assistant', content: `${summary} Écriture proposée : ${JSON.stringify(proposal)}`, display: summary, proposalId: id });
-    }
+    const opts = { cache: false, signal: chat.ctl.signal, onText: ({ text: t }) => { chat.live = t; const live = body.querySelector('#chat-live'); if (live) { live.textContent = t; live.classList.remove('thinking'); } } };
+    if (images.length && lim?.images) opts.images = images.slice(0, lim.images.maxCount);
+    const { text: answer } = await sample(input, opts);
+    const { text: shown, proposal, bankLines } = parseBlocks(answer);
+    saveChatMessage({ role: 'assistant', text: shown, at: new Date().toISOString(), proposal, bankLines });
   } catch (e) {
-    if (e.code !== 'cancelled') chat.turns.push({ role: 'assistant', content: '…', display: `⚠︎ ${ERRORS[e.code] || 'Lecture interrompue. Réessayez.'}` });
+    if (e.code !== 'cancelled') saveChatMessage({ role: 'assistant', text: `${e.text ? `${e.text}\n\n` : ''}⚠︎ ${ERRORS[e.code] || 'Réponse interrompue. Réessayez.'}`, at: new Date().toISOString() });
   } finally {
     chat.busy = false;
+    chat.live = '';
     renderChat(body);
   }
 }

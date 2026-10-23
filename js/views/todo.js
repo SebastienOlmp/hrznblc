@@ -1,13 +1,13 @@
 // Onglet TO DO : décisions à trancher, actions, entretien ; check-lists d'arrivée / départ.
 import { esc, uid, today, fmtDate, plural } from '../utils.js';
 import { db, upsert, remove, byId } from '../store.js';
-import { taskForm, TASK_KINDS } from './forms.js';
+import { taskForm, TASK_KINDS, TASK_STATUS } from './forms.js';
 import { openSheet, field, toast, ask, empty } from '../ui.js';
 
 const state = { tab: 'afaire' };
 const PRIO_ORDER = { haute: 0, normale: 1, basse: 2 };
 
-export const openTasks = () => db().tasks.filter((t) => t.status !== 'done');
+export const openTasks = () => db().tasks.filter((t) => !t.status || t.status === 'todo');
 
 function sortTasks(list) {
   return [...list].sort((a, b) =>
@@ -19,13 +19,13 @@ function sortTasks(list) {
 function taskRow(t, d) {
   const late = t.status !== 'done' && t.date && t.date < d;
   return `
-    <div class="item task ${t.status === 'done' ? 'is-done' : ''}">
-      <button class="tick" data-tick="${t.id}" aria-label="${t.status === 'done' ? 'Rouvrir' : 'Marquer fait'}">${t.status === 'done' ? '✓' : ''}</button>
+    <div class="item task ${t.status && t.status !== 'todo' ? 'is-done' : ''}">
+      <button class="tick" data-tick="${t.id}" aria-label="${t.status && t.status !== 'todo' ? 'Rouvrir' : 'Marquer fait'}">${t.status === 'done' ? '✓' : t.status && t.status !== 'todo' ? '–' : ''}</button>
       <button class="item-main as-btn" data-task="${t.id}">
         <strong>${esc(t.title)}</strong>
-        <small>${esc(TASK_KINDS[t.kind] || 'Action')}${t.date ? ` · ${fmtDate(t.date, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}${late ? ' · <b class="neg">en retard</b>' : ''}${t.source === 'mail' ? ' · depuis un mail' : ''}</small>
+        <small>${esc(TASK_KINDS[t.kind] || 'Action')}${t.date ? ` · ${fmtDate(t.date, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}${late ? ' · <b class="neg">en retard</b>' : ''}${t.source === 'mail' ? ' · depuis un mail' : ''}${t.answerPending ? ' · <b>réponse envoyée à Claude</b>' : t.claudeReply ? ' · Claude a répondu' : ''}</small>
       </button>
-      ${t.priority === 'haute' && t.status !== 'done' ? '<span class="badge annulee">Haute</span>' : ''}
+      ${t.status && t.status !== 'todo' ? `<span class="badge ${t.status === 'done' ? '' : 'option'}">${TASK_STATUS[t.status] || t.status}</span>` : t.priority === 'haute' ? '<span class="badge annulee">Haute</span>' : ''}
     </div>`;
 }
 
@@ -33,7 +33,7 @@ export function renderTodo(root) {
   const d = today();
   const { tab } = state;
   const open = sortTasks(openTasks());
-  const done = db().tasks.filter((t) => t.status === 'done').sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || ''));
+  const done = db().tasks.filter((t) => t.status && t.status !== 'todo').sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || ''));
   const decisions = open.filter((t) => t.kind === 'decision');
   const others = open.filter((t) => t.kind !== 'decision');
 
@@ -43,8 +43,8 @@ export function renderTodo(root) {
       ${decisions.length ? `<h2 class="section-title">Décisions à trancher</h2><div class="list">${decisions.map((t) => taskRow(t, d)).join('')}</div>` : ''}
       <h2 class="section-title">À faire</h2>
       ${others.length ? `<div class="list">${others.map((t) => taskRow(t, d)).join('')}</div>` : empty('Rien à faire pour l’instant.')}`;
-  } else if (tab === 'fait') {
-    body = done.length ? `<div class="list">${done.map((t) => taskRow(t, d)).join('')}</div>` : empty('Aucune tâche terminée.');
+  } else if (tab === 'archive') {
+    body = done.length ? `<p class="hint">Toutes les tâches faites, non retenues ou archivées, avec leur historique. Touchez-en une pour la relire ou la rouvrir.</p><div class="list">${done.map((t) => taskRow(t, d)).join('')}</div>` : empty('Aucune tâche archivée.');
   } else {
     body = `
       ${db().checklists.map((cl) => {
@@ -64,7 +64,7 @@ export function renderTodo(root) {
       <button class="btn primary" data-act="new">+ Tâche</button>
     </header>
     <div class="segmented">
-      ${[['afaire', `À faire (${open.length})`], ['fait', 'Fait'], ['listes', 'Check-lists']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
+      ${[['afaire', `À faire (${open.length})`], ['archive', `Archive (${done.length})`], ['listes', 'Check-lists']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
     </div>
     ${body}
   `;
@@ -76,9 +76,10 @@ export function renderTodo(root) {
     else if (el.dataset.task) taskForm(byId('tasks', el.dataset.task));
     else if (el.dataset.tick) {
       const t = byId('tasks', el.dataset.tick);
-      const doneNow = t.status !== 'done';
-      upsert('tasks', { ...t, status: doneNow ? 'done' : 'todo', doneAt: doneNow ? today() : null });
-      toast(doneNow ? 'Fait' : 'Rouverte');
+      const doneNow = !t.status || t.status === 'todo';
+      const history = [...(t.history || []), { at: new Date().toISOString(), by: 'moi', text: doneNow ? 'Marquée faite' : 'Rouverte' }];
+      upsert('tasks', { ...t, status: doneNow ? 'done' : 'todo', doneAt: doneNow ? today() : null, history });
+      toast(doneNow ? 'Fait, archivée' : 'Rouverte');
     } else if (el.dataset.act === 'new') taskForm(null);
     else if (el.dataset.act === 'new-cl') checklistForm(null);
     else if (el.dataset.editCl) checklistForm(byId('checklists', el.dataset.editCl));

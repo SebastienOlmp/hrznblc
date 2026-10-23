@@ -1,7 +1,8 @@
 // Point d'entrée : navigation par onglets, rendu, synchronisation.
 import { $, esc } from './utils.js';
 import { connect, onChange, isReady, setErrorHandler, db, setAccountingHook } from './store.js';
-import { requestLedgerUpdate, setLedgerNotifier } from './ledger.js';
+import { requestLedgerUpdate, requestTaskFollowUp, setLedgerNotifier } from './ledger.js';
+import { setTaskHook } from './views/forms.js';
 import { initSheet, toast } from './ui.js';
 import { renderCalendar } from './views/calendar.js';
 import { renderCompta, pendingInbox } from './views/compta.js';
@@ -105,6 +106,7 @@ initSheet();
 setErrorHandler((msg) => toast(msg));
 onChange(render);
 setAccountingHook(requestLedgerUpdate);
+setTaskHook(requestTaskFollowUp);
 setLedgerNotifier(render);
 const start = location.hash.slice(1);
 if (VIEWS[start]) current = start;

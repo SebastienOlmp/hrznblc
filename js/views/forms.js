@@ -5,7 +5,7 @@ import {
   EXPENSE_ACCOUNTS, CONTACT_KINDS, overlaps, findContactByName, sortedContacts, resNights, resNet,
   conciergeCost, computeTax, taxByMe,
 } from '../store.js';
-import { field, row, openSheet, toast, ask } from '../ui.js';
+import { field, row, openSheet, toast, ask, uploadFile, attachmentLinks } from '../ui.js';
 
 const opts = (obj) => Object.entries(obj).map(([value, label]) => ({ value, label }));
 const WEEKDAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -190,6 +190,7 @@ export function reservationRow(r) {
 
 export function expenseForm(existing, preset = null, onSaved = null) {
   const e = existing || { date: today(), account: '614000', paidBy: 'banque', ...(preset || {}) };
+  const attachments = [...(e.attachments || [])];
   openSheet({
     title: existing ? 'Dépense' : preset ? 'Valider la dépense proposée' : 'Nouvelle dépense',
     body: `
@@ -207,12 +208,29 @@ export function expenseForm(existing, preset = null, onSaved = null) {
       ${field({ name: 'paidBy', label: 'Payé par', type: 'select', options: [{ value: 'banque', label: 'Compte bancaire dédié (512100)' }, { value: 'regine', label: 'Avance de Régine (467600)' }, { value: 'exploitant', label: 'Moi, sur mes fonds personnels (108000)' }], value: e.paidBy })}
       ${field({ name: 'reimbursed', label: 'Avance remboursée à Régine', type: 'checkbox', value: e.reimbursed })}
       ${field({ name: 'notes', label: 'Notes', type: 'textarea', value: e.notes })}
+      <h3 class="form-section">Justificatif</h3>
+      <div class="attach-list" data-attach>${attachmentLinks(attachments) || '<span class="muted">Aucun justificatif joint.</span>'}</div>
+      <label class="btn small file-btn">+ Joindre une photo ou un PDF<input type="file" accept="image/*,application/pdf" data-attach-input hidden></label>
+      ${e.ledgerEntry ? `<p class="hint">Au classeur : écriture n° ${e.ledgerEntry}${e.piece ? `, pièce ${esc(e.piece)}` : ''}.</p>` : ''}
     `,
+    onMount(dlg) {
+      dlg.querySelector('[data-attach-input]').addEventListener('change', async (ev) => {
+        const f = ev.target.files?.[0];
+        if (!f) return;
+        toast('Archivage…');
+        const a = await uploadFile(f);
+        if (!a) return;
+        attachments.push(a);
+        dlg.querySelector('[data-attach]').innerHTML = attachmentLinks(attachments);
+        toast('Justificatif joint');
+      });
+    },
     async onSubmit(v) {
       if (num(v.amount) <= 0) { toast('Indiquez un montant.'); return false; }
       const saved = upsert('expenses', {
         ...(existing || {}), label: v.label.trim(), amount: num(v.amount), date: v.date, account: v.account,
         supplier: v.supplier, piece: v.piece, paidBy: v.paidBy, reimbursed: v.paidBy === 'regine' ? v.reimbursed : false, notes: v.notes,
+        attachments,
         ...(preset?.source ? { source: preset.source, sourceLink: preset.sourceLink || '' } : {}),
       });
       onSaved?.(saved);
@@ -266,13 +284,19 @@ export function contactForm(existing, kind = 'prestataire') {
 export const TASK_KINDS = { action: 'Action', decision: 'Décision à trancher', entretien: 'Entretien / travaux', admin: 'Administratif' };
 export const PRIORITIES = { haute: 'Haute', normale: 'Normale', basse: 'Basse' };
 
+export const TASK_STATUS = { todo: 'À faire', done: 'Fait', refusee: 'Non retenue', supprimee: 'Archivée (supprimée)' };
+let taskHook = null;
+/** Appelé quand une réponse ou un statut de tâche change : Claude en fait le suivi. */
+export const setTaskHook = (fn) => { taskHook = fn; };
+
 export function taskForm(existing, preset = {}) {
   const t = existing || { date: '', status: 'todo', kind: preset.kind || 'action', priority: 'normale', source: 'manuel' };
   const pros = sortedContacts().filter((c) => c.kind !== 'voyageur');
+  const history = Array.isArray(t.history) ? t.history : [];
   openSheet({
     title: existing ? 'Tâche' : 'Nouvelle tâche',
     body: `
-      ${t.source && t.source !== 'manuel' ? `<p class="hint">Créée ${t.source === 'mail' ? 'depuis un mail' : 'par Claude'}${t.link ? ` · <a href="${esc(t.link)}" target="_blank" rel="noopener">ouvrir le mail</a>` : ''}</p>` : ''}
+      ${t.source && t.source !== 'manuel' ? `<p class="hint">Proposée ${t.source === 'mail' ? 'depuis un mail' : t.source === 'brief' ? 'à partir de votre brief' : 'par Claude'}${t.createdAt ? ` le ${fmtDate(t.createdAt.slice(0, 10), { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}${t.link ? ` · <a href="${esc(t.link)}" target="_blank" rel="noopener">ouvrir le mail</a>` : ''}</p>` : ''}
       ${field({ name: 'title', label: 'Quoi ?', value: t.title, required: true, placeholder: 'Ex. Relancer Pacifica (capacité 6)' })}
       ${row(
         field({ name: 'kind', label: 'Type', type: 'select', options: opts(TASK_KINDS), value: t.kind }),
@@ -280,20 +304,32 @@ export function taskForm(existing, preset = {}) {
       )}
       ${row(
         field({ name: 'date', label: 'Échéance', type: 'date', value: t.date }),
-        field({ name: 'status', label: 'Statut', type: 'select', options: [{ value: 'todo', label: 'À faire' }, { value: 'done', label: 'Fait' }], value: t.status }),
+        field({ name: 'status', label: 'Statut', type: 'select', options: opts(TASK_STATUS), value: t.status }),
       )}
-      ${field({ name: 'notes', label: 'Détails / options à trancher', type: 'textarea', rows: 4, value: t.notes })}
-      ${field({ name: 'decision', label: 'Décision prise', type: 'textarea', rows: 2, value: t.decision, placeholder: 'À remplir une fois tranché' })}
+      ${t.notes ? `<div class="note-box"><small>Contexte</small><p>${esc(t.notes).replace(/\n/g, '<br>')}</p></div>` : ''}
+      ${t.claudeReply ? `<div class="note-box claude"><small>Réponse de Claude${t.claudeReplyAt ? ` · ${fmtDate(t.claudeReplyAt.slice(0, 10), { day: 'numeric', month: 'short' })}` : ''}</small><p>${esc(t.claudeReply).replace(/\n/g, '<br>')}</p></div>` : ''}
+      ${field({ name: 'decision', label: 'Ma réponse à Claude', type: 'textarea', rows: 3, value: '', placeholder: 'Ex. « C’est fait, Pacifica a confirmé par mail » ou « Non, inutile ». Dictée possible avec le micro du clavier.', hint: 'Claude lit votre réponse, fait ce qui est possible de son côté et vous répond ici.' })}
+      ${!existing ? field({ name: 'notes', label: 'Détails', type: 'textarea', rows: 3, value: '' }) : ''}
       <h3 class="form-section">Prestataire et coût (facultatif)</h3>
       ${field({ name: 'contactId', label: 'Prestataire', type: 'select', options: [{ value: '', label: '— Aucun —' }, ...pros.map((c) => ({ value: c.id, label: c.role ? `${c.name} (${c.role})` : c.name }))], value: t.contactId || '' })}
       ${field({ name: 'cost', label: 'Coût', type: 'money', value: t.cost })}
       ${field({ name: 'toExpense', label: t.expenseId ? 'Dépense liée dans Compta (mise à jour automatique)' : 'Ajouter le coût aux dépenses (615000)', type: 'checkbox', value: Boolean(t.expenseId) })}
+      ${history.length ? `<h3 class="form-section">Historique</h3><ul class="history">${history.slice().reverse().map((h) => `<li><small>${fmtDate((h.at || '').slice(0, 10), { day: 'numeric', month: 'short', year: 'numeric' })} · ${h.by === 'claude' ? 'Claude' : 'Vous'}</small><span>${esc(h.text)}</span></li>`).join('')}</ul>` : ''}
     `,
     async onSubmit(v) {
+      const now = new Date().toISOString();
+      const events = [...history];
+      const reply = v.decision.trim();
+      if (!existing) events.push({ at: now, by: 'moi', text: 'Tâche créée' });
+      if (existing && v.status !== t.status) events.push({ at: now, by: 'moi', text: `Statut : ${TASK_STATUS[t.status] || t.status} → ${TASK_STATUS[v.status]}` });
+      if (reply) events.push({ at: now, by: 'moi', text: reply });
       const task = {
         ...(existing || {}), title: v.title.trim(), kind: v.kind, priority: v.priority, date: v.date, status: v.status,
-        notes: v.notes, decision: v.decision, contactId: v.contactId || null, cost: num(v.cost), source: t.source || 'manuel',
-        doneAt: v.status === 'done' ? (t.doneAt || today()) : null,
+        notes: existing ? t.notes || '' : v.notes, contactId: v.contactId || null, cost: num(v.cost), source: t.source || 'manuel',
+        createdAt: t.createdAt || now, history: events,
+        decision: reply || t.decision || '',
+        doneAt: v.status !== 'todo' ? (t.doneAt || today()) : null,
+        answerPending: Boolean(reply) || Boolean(existing && v.status !== t.status) || Boolean(t.answerPending),
       };
       if (v.toExpense && task.cost > 0) {
         const prev = task.expenseId ? byId('expenses', task.expenseId) : null;
@@ -308,13 +344,15 @@ export function taskForm(existing, preset = {}) {
         task.expenseId = null;
       }
       upsert('tasks', task);
-      toast(existing ? 'Tâche mise à jour' : 'Tâche ajoutée');
+      if (task.answerPending && existing) taskHook?.(`« ${task.title} » : ${reply || `statut ${TASK_STATUS[v.status]}`}`);
+      toast(reply ? 'Réponse envoyée à Claude' : existing ? 'Tâche mise à jour' : 'Tâche ajoutée');
     },
+    deleteLabel: 'Archiver (ne plus l’afficher)',
     onDelete: existing ? async () => {
-      if (!(await ask('Supprimer cette tâche ?', { ok: 'Supprimer', danger: true }))) return false;
-      if (existing.expenseId && (await ask('Supprimer aussi la dépense liée ?', { ok: 'Supprimer', danger: true }))) remove('expenses', existing.expenseId);
-      remove('tasks', existing.id);
-      toast('Tâche supprimée');
+      if (!(await ask('Archiver cette tâche ? Elle reste consultable dans l’onglet Archive.', { ok: 'Archiver' }))) return false;
+      const now = new Date().toISOString();
+      upsert('tasks', { ...existing, status: 'supprimee', doneAt: existing.doneAt || today(), history: [...history, { at: now, by: 'moi', text: 'Archivée à ma demande' }] });
+      toast('Tâche archivée');
     } : null,
   });
 }

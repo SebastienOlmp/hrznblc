@@ -159,3 +159,22 @@ export async function copy(text) {
 }
 
 export const empty = (text, action = '') => `<div class="empty"><p>${esc(text)}</p>${action}</div>`;
+
+let assetsPromise = null;
+const getAssets = () => (assetsPromise ||= Promise.resolve(window.claude?.use?.('assets')).catch(() => null));
+
+/** Archive un fichier (photo, PDF) dans l'espace de l'appli. Renvoie { id, url, name, type, size, at } ou null. */
+export async function uploadFile(file) {
+  const assets = await getAssets();
+  if (!assets) { toast('Archivage des fichiers indisponible dans cette vue.'); return null; }
+  try {
+    const r = await assets.upload(file);
+    return { id: r.id, url: r.url, name: file.name || 'piece', type: r.contentType || file.type, size: r.sizeBytes, at: new Date().toISOString() };
+  } catch (e) {
+    toast(e?.code === 'too_large' ? 'Fichier trop lourd (20 Mo maximum).' : e?.code === 'unsupported_type' ? 'Type de fichier non accepté (photo ou PDF).' : 'Archivage impossible pour le moment.');
+    return null;
+  }
+}
+
+/** Liens vers des pièces jointes archivées. */
+export const attachmentLinks = (list = []) => list.map((a) => `<a class="attach" href="${esc(a.url)}" target="_blank" rel="noopener">${a.type?.startsWith('image/') ? '🖼' : '📄'} ${esc(a.name)}</a>`).join('');
