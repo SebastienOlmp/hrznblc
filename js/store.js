@@ -30,13 +30,17 @@ export const DEPOSIT = { na: 'Sans objet', demandee: 'Demandée', recue: 'Reçue
 
 /** Comptes de charges / immobilisations proposés pour les dépenses (plan comptable du classeur). */
 export const EXPENSE_ACCOUNTS = [
-  ['606100', 'Électricité'], ['606300', 'Petit équipement'], ['606400', 'Fournitures administratives'],
-  ['606800', 'Linge, entretien, consommables'], ['613200', 'Abonnements'], ['614000', 'Charges de copropriété'],
-  ['615000', 'Entretien et réparations'], ['616000', 'Assurance PNO'], ['616600', 'Assurance emprunteur'],
-  ['622600', 'Honoraires'], ['622700', 'Frais d’actes'], ['622800', 'Commissions plateformes'],
-  ['622900', 'Conciergerie'], ['623000', 'Annonces'], ['626000', 'Télécoms'], ['627000', 'Services bancaires'],
-  ['635100', 'Taxe foncière'], ['635200', 'CFE'], ['661100', 'Intérêts d’emprunt'],
-  ['213400', 'Immobilisation : agencements intérieurs'], ['218400', 'Immobilisation : mobilier'],
+  ['606100', 'Électricité'], ['606300', 'Petit équipement et petit outillage'], ['606400', 'Fournitures administratives'],
+  ['606800', 'Linge, produits d’entretien et consommables'], ['613200', 'Abonnements logiciels et services en ligne'],
+  ['614000', 'Charges de copropriété (LOGEVAC)'], ['615000', 'Entretien et réparations'], ['616000', 'Assurance PNO'],
+  ['616100', 'Extensions de garantie et contrats de service'], ['616600', 'Assurance emprunteur'],
+  ['622600', 'Honoraires (comptable, juridique)'], ['622700', 'Frais d’actes'], ['622800', 'Commissions des plateformes'],
+  ['622900', 'Prestations de conciergerie'], ['623000', 'Annonces et commercialisation'], ['625100', 'Déplacements et carburant'],
+  ['626000', 'Frais postaux et télécommunications'], ['627000', 'Services bancaires'], ['635100', 'Taxe foncière'],
+  ['635200', 'CFE'], ['661100', 'Intérêts de l’emprunt'],
+  ['213400', 'Immobilisation : agencements intérieurs'], ['218410', 'Immobilisation : électroménager et audiovisuel'],
+  ['218420', 'Immobilisation : meubles de cuisine'], ['218430', 'Immobilisation : lits, sièges, tables, rangements'],
+  ['218440', 'Immobilisation : luminaires, linge, vaisselle, décoration'], ['275000', 'Avance au syndicat (fonds de travaux, roulement)'],
 ];
 export const accountLabel = (code) => EXPENSE_ACCOUNTS.find(([c]) => c === code)?.[1] || code;
 
@@ -99,12 +103,13 @@ const empty = () => ({
   inbox: [], // éléments détectés dans les mails par la tâche planifiée, à valider
   bank: [], // lignes de relevé importées
   pricing: [], // grille tarifaire : une ligne par semaine
+  ledger: {}, // état du classeur Excel maître (lecture seule, tenu par Claude)
   market: {}, // veille marché écrite par la tâche planifiée : { updatedAt, summary, comparables: [] }
   taxLog: {}, // { '2026-12': true (déclaration mensuelle faite), 'R2026-3': true (reversement fait) }
 });
 
 export const COLLECTIONS = ['reservations', 'expenses', 'contacts', 'tasks', 'deadlines', 'checklists', 'documents', 'inbox', 'bank', 'pricing'];
-const CONFIG_DOCS = { settings: 'config/settings', property: 'config/property', taxLog: 'config/taxlog', market: 'config/market' };
+const CONFIG_DOCS = { settings: 'config/settings', property: 'config/property', taxLog: 'config/taxlog', market: 'config/market', ledger: 'ledger/meta' };
 
 function normalize(raw) {
   const base = empty();
@@ -199,6 +204,7 @@ export async function connect(onFirstData) {
         if (k === 'settings') data.settings = { ...defaultSettings(), ...v };
         else if (k === 'property') data.property = { sections: Array.isArray(v.sections) ? v.sections : [] };
         else if (k === 'market') data.market = { ...v };
+        else if (k === 'ledger') data.ledger = { ...v };
         else data.taxLog = { ...v };
         loaded(k);
         notify();

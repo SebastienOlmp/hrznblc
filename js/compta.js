@@ -56,7 +56,7 @@ export function journalEntries(year) {
   for (const e of db().expenses) {
     if (!e.date?.startsWith(y)) continue;
     const amt = round2(Number(e.amount) || 0);
-    const credit = e.paidBy === 'regine' ? '467600' : String(e.account).startsWith('2') ? '404000' : '401000';
+    const credit = e.paidBy === 'regine' ? '467600' : e.paidBy === 'exploitant' ? '108000' : String(e.account).startsWith('2') ? '404000' : '401000';
     ops.push({
       journal: 'AC', date: e.date, piece: e.piece || '', ref: e.supplier || '',
       lines: [[e.account, e.label, amt, 0], [credit, e.label, 0, amt]],
@@ -78,7 +78,7 @@ export function journalEntries(year) {
 const ACCOUNT_NAMES = {
   '401000': 'Fournisseurs', '404000': 'Fournisseurs d’immobilisations', '411000': 'Clients locations directes',
   '447000': 'Taxe de séjour à reverser', '467100': 'Airbnb liaison', '467200': 'Booking liaison',
-  '467300': 'Chalet-Montagne liaison', '467400': 'Leboncoin/GdC liaison', '467600': 'Avances de tiers',
+  '467300': 'Chalet-Montagne liaison', '467400': 'Leboncoin/GdC liaison', '467600': 'Régine Fichera — avances', '108000': 'Compte de l’exploitant',
   '487000': 'Produits constatés d’avance', '622800': 'Commissions plateformes', '706000': 'Locations meublées',
 };
 const accountName = (code) => ACCOUNT_NAMES[code] || accountLabel(code);

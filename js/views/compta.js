@@ -92,9 +92,28 @@ function synthese(year, months, totals, expenses) {
       ${immo.length ? `<p class="hint">Acquisitions immobilisées (hors résultat, à amortir dans le classeur) : ${money(immo.reduce((s, e) => s + (Number(e.amount) || 0), 0))}</p>` : ''}
     </div>
     ${regine.length ? `<div class="card warn-card"><h3 class="card-title">Avances de Régine à rembourser (467600)</h3><p class="big">${money(regine.reduce((s, e) => s + (Number(e.amount) || 0), 0))}</p><small class="hint">${plural(regine.length, 'dépense', 'dépenses')} non remboursée${regine.length > 1 ? 's' : ''}.</small></div>` : ''}
+    ${ledgerCard()}
     <button class="btn block" data-act="csv">Exporter les écritures ${year} (CSV pour le classeur)</button>
     <p class="hint">Résultat calculé avant amortissements et intérêts d’emprunt non saisis : la liasse se fait depuis le classeur Excel. Recettes réparties au prorata des nuits ; séjours à cheval sur deux exercices traités en PCA (487000) dans l’export.</p>
   `;
+}
+
+function ledgerCard() {
+  const l = db().ledger || {};
+  const v = (l.versions || []).find((x) => x.version === l.currentVersion);
+  if (!v) return '';
+  const waiting = db().expenses.filter((e) => !e.ledgerEntry).length;
+  return `<div class="card">
+    <h3 class="card-title">Classeur maître (Excel)</h3>
+    <ul class="kv">
+      <li><span>Version</span><span>${l.currentVersion} · ${fmtDate(v.updatedAt.slice(0, 10), { day: 'numeric', month: 'short', year: 'numeric' })}</span></li>
+      <li><span>Dernière écriture</span><span>n° ${l.lastEntryNo} · pièce ${esc(l.lastPiece || '')}</span></li>
+      <li><span>Dernier relevé rapproché</span><span>${l.lastBankStatement ? fmtDate(l.lastBankStatement, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'} · ${money(l.bankBalance)}</span></li>
+      <li><span>Résultat au classeur (avant amortissements)</span><span>${money(l.resultBeforeDepreciation)}</span></li>
+      <li><span>Dépenses de l’appli pas encore reportées</span><span>${waiting}</span></li>
+    </ul>
+    <small class="hint">Claude tient ce fichier à jour à partir de l’appli. Pour le recevoir, demandez-le dans une conversation Claude Code : « envoie-moi la compta à jour ».</small>
+  </div>`;
 }
 
 function valider(pending) {
@@ -131,7 +150,7 @@ function depenses(year, expenses) {
     <button class="btn block primary" data-act="new-exp">+ Ajouter une dépense</button>
     ${expenses.length ? `<div class="list">${expenses.map((e) => `
       <button class="item" data-exp="${e.id}">
-        <span class="item-main"><strong>${esc(e.label)}</strong><small>${fmtDate(e.date, { day: 'numeric', month: 'short', year: 'numeric' })} · <code>${esc(e.account)}</code> ${esc(accountLabel(e.account))}${e.paidBy === 'regine' ? ` · avance Régine${e.reimbursed ? ' (remboursée)' : ''}` : ''}</small></span>
+        <span class="item-main"><strong>${esc(e.label)}</strong><small>${fmtDate(e.date, { day: 'numeric', month: 'short', year: 'numeric' })} · <code>${esc(e.account)}</code> ${esc(accountLabel(e.account))}${e.paidBy === 'regine' ? ` · avance Régine${e.reimbursed ? ' (remboursée)' : ''}` : ''}${e.ledgerEntry ? ` · classeur n° ${e.ledgerEntry}` : ''}</small></span>
         <span class="item-side"><span>${money(e.amount)}</span></span>
       </button>`).join('')}</div>` : empty(`Aucune dépense en ${year}.`)}
   `;

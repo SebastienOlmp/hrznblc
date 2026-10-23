@@ -204,7 +204,7 @@ export function expenseForm(existing, preset = null, onSaved = null) {
         field({ name: 'supplier', label: 'Fournisseur', value: e.supplier }),
         field({ name: 'piece', label: 'N° justificatif', value: e.piece }),
       )}
-      ${field({ name: 'paidBy', label: 'Payé par', type: 'select', options: [{ value: 'banque', label: 'Compte bancaire dédié' }, { value: 'regine', label: 'Avance de Régine (467600)' }], value: e.paidBy })}
+      ${field({ name: 'paidBy', label: 'Payé par', type: 'select', options: [{ value: 'banque', label: 'Compte bancaire dédié (512100)' }, { value: 'regine', label: 'Avance de Régine (467600)' }, { value: 'exploitant', label: 'Moi, sur mes fonds personnels (108000)' }], value: e.paidBy })}
       ${field({ name: 'reimbursed', label: 'Avance remboursée à Régine', type: 'checkbox', value: e.reimbursed })}
       ${field({ name: 'notes', label: 'Notes', type: 'textarea', value: e.notes })}
     `,

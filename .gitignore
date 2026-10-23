@@ -1,3 +1,5 @@
 _preview.html
 node_modules/
 .DS_Store
+*.xlsx
+*.xls
