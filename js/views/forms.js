@@ -219,7 +219,7 @@ export function expenseForm(existing, preset = null, onSaved = null) {
       toast(existing ? 'Dépense mise à jour' : 'Dépense ajoutée');
     },
     onDelete: existing ? async () => {
-      if (!(await ask('Supprimer cette dépense ?', { ok: 'Supprimer', danger: true }))) return false;
+      if (!(await ask(existing.ledgerEntry ? `Cette dépense est déjà au classeur (écriture n° ${existing.ledgerEntry}). La supprimer ici demandera une contre-passation, que Claude vous proposera. Continuer ?` : 'Supprimer cette dépense ?', { ok: 'Supprimer', danger: true }))) return false;
       remove('expenses', existing.id);
       db().tasks.filter((t) => t.expenseId === existing.id).forEach((t) => upsert('tasks', { ...t, expenseId: null }));
       toast('Dépense supprimée');

@@ -50,6 +50,15 @@ def main(src, dst):
             else:
                 m['produits'] = round(m['produits'] + cre - deb, 2)
 
+    # Dotations prévues par année (onglet Immobilisations, colonnes d'années en ligne 4)
+    I = wb['Immobilisations']
+    depreciation = {}
+    total_row = next((r for r in range(5, I.max_row + 1) if str(I.cell(r, 1).value or '').strip().upper() == 'TOTAL'), None)
+    for c in range(1, I.max_column + 1):
+        y = I.cell(4, c).value
+        if total_row and (isinstance(y, (int, float)) or (isinstance(y, str) and y.isdigit())):
+            depreciation[str(int(y))] = num(I.cell(total_row, c).value)
+
     charges = round(sum(a['balance'] for a in accounts if a['code'][0] == '6'), 2)
     produits = round(-sum(a['balance'] for a in accounts if a['code'][0] == '7'), 2)
     exercise = wb['Paramètres']['C10'].value
@@ -64,6 +73,7 @@ def main(src, dst):
         'fixedAssets': round(sum(v for k, v in bal.items() if k.startswith('21')), 2),
         'journalGap': J['J1007'].value,
         'bankGap': J['J1011'].value,
+        'depreciation': depreciation,
         'accounts': accounts,
         'months': months,
         'lines': lines,

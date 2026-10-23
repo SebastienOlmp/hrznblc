@@ -110,7 +110,7 @@ const empty = () => ({
 });
 
 export const COLLECTIONS = ['reservations', 'expenses', 'contacts', 'tasks', 'deadlines', 'checklists', 'documents', 'inbox', 'bank', 'pricing'];
-const CONFIG_DOCS = { settings: 'config/settings', property: 'config/property', taxLog: 'config/taxlog', market: 'config/market', ledger: 'ledger/meta', ledgerSummary: 'ledger/summary' };
+const CONFIG_DOCS = { settings: 'config/settings', property: 'config/property', taxLog: 'config/taxlog', market: 'config/market', ledger: 'ledger/meta', ledgerSummary: 'ledger/summary', ledgerRequest: 'ledger/request' };
 
 function normalize(raw) {
   const base = empty();
@@ -207,6 +207,7 @@ export async function connect(onFirstData) {
         else if (k === 'market') data.market = { ...v };
         else if (k === 'ledger') data.ledger = { ...v };
         else if (k === 'ledgerSummary') data.ledgerSummary = { ...v };
+        else if (k === 'ledgerRequest') data.ledgerRequest = { ...v };
         else data.taxLog = { ...v };
         loaded(k);
         notify();
@@ -216,10 +217,19 @@ export async function connect(onFirstData) {
   }
 }
 
+// Saisies qui touchent la comptabilité : signalées pour le report au classeur maître.
+const ACCOUNTING = { expenses: 'dépense', reservations: 'réservation', bank: 'ligne de banque' };
+let accountingHook = null;
+export const setAccountingHook = (fn) => { accountingHook = fn; };
+const describe = (coll, item, verb) => `${ACCOUNTING[coll]} « ${item.label || item.guestName || item.id} » ${verb}`;
+
 export function upsert(coll, item) {
   if (!item.id) item.id = uid();
   const list = data[coll];
   const i = list.findIndex((x) => x.id === item.id);
+  if (ACCOUNTING[coll] && accountingHook && !(coll === 'bank' && !item.match && (i < 0 || !list[i].match))) {
+    accountingHook(describe(coll, item, i >= 0 ? 'modifiée' : 'ajoutée'));
+  }
   if (i >= 0) list[i] = item;
   else list.push(item);
   notify();
@@ -229,6 +239,8 @@ export function upsert(coll, item) {
 }
 
 export function remove(coll, id) {
+  const gone = data[coll].find((x) => x.id === id);
+  if (gone && ACCOUNTING[coll] && accountingHook) accountingHook(describe(coll, gone, `supprimée${gone.ledgerEntry ? ` (déjà au classeur, écriture n° ${gone.ledgerEntry} : contre-passation à proposer)` : ''}`));
   data[coll] = data[coll].filter((x) => x.id !== id);
   notify();
   persist(`${coll}/${id}`, () => cloud.collection(coll).doc(id).delete());

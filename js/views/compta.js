@@ -4,8 +4,9 @@ import { db, upsert, yearStats, yearsWithData, EXPENSE_ACCOUNTS, accountLabel, i
 import { expenseForm } from './forms.js';
 import { empty, saveFile, toast } from '../ui.js';
 import { journalCSV } from '../compta.js';
+import { ledgerStatus, fire } from '../ledger.js';
 
-const state = { year: new Date().getFullYear(), tab: 'synthese', account: null };
+const state = { year: new Date().getFullYear(), tab: 'synthese', account: null, month: null };
 const chat = { turns: [], busy: false, ctl: null, proposals: {}, draft: '' };
 
 export const pendingInbox = () => db().inbox.filter((x) => x.status === 'a_valider' && x.proposal);
@@ -40,17 +41,8 @@ export function renderCompta(root) {
   const pending = pendingInbox();
   const p = pendingFor(year);
 
-  let band;
-  if (L) {
-    const withPending = L.result + p.revenue - p.expenses;
-    const hasPending = p.nExp || p.nRes;
-    band = `<div class="result-band ${L.result < 0 ? 'neg' : 'pos'}">
-      <small>Résultat ${year} au classeur · avant amortissements</small>
-      <strong>${money(L.result)}</strong>
-      <span>${money0(L.produits)} de produits − ${money0(L.charges)} de charges</span>
-      ${hasPending ? `<span>Avec ${p.nExp + p.nRes} opération${p.nExp + p.nRes > 1 ? 's' : ''} de l’appli pas encore reportée${p.nExp + p.nRes > 1 ? 's' : ''} : <b>${money(withPending)}</b></span>` : ''}
-    </div>`;
-  } else {
+  let band = '';
+  if (!L) {
     band = `<div class="result-band ${totals.result < 0 ? 'neg' : 'pos'}">
       <small>Résultat ${year} selon l’appli · avant amortissements</small>
       <strong>${money0(totals.result)}</strong>
@@ -65,6 +57,7 @@ export function renderCompta(root) {
       <select class="year-select" id="compta-year" aria-label="Exercice">${years.map((y) => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select>
     </header>
     ${band}
+    ${statusLine()}
     <div class="segmented">
       ${tabs.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
     </div>
@@ -79,9 +72,16 @@ export function renderCompta(root) {
 
   root.querySelector('#compta-year').onchange = (e) => { state.year = Number(e.target.value); renderCompta(root); };
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tab],[data-exp],[data-act],[data-inbox],[data-ignore],[data-prop],[data-acc]');
+    const el = e.target.closest('[data-tab],[data-month],[data-exp],[data-act],[data-inbox],[data-ignore],[data-prop],[data-acc]');
     if (!el) return;
     if (el.dataset.tab) { state.tab = el.dataset.tab; state.account = null; renderCompta(root); }
+    else if (el.dataset.month) {
+      const [y, m] = state.month.split('-').map(Number);
+      const d = new Date(Date.UTC(y, m - 1 + Number(el.dataset.month), 1));
+      state.month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      if (d.getUTCFullYear() !== state.year) state.year = d.getUTCFullYear();
+      renderCompta(root);
+    }
     else if (el.dataset.acc !== undefined) { state.tab = 'journal'; state.account = el.dataset.acc || null; renderCompta(root); window.scrollTo(0, 0); }
     else if (el.dataset.exp) expenseForm(db().expenses.find((x) => x.id === el.dataset.exp));
     else if (el.dataset.inbox) validateInbox(el.dataset.inbox);
@@ -92,12 +92,77 @@ export function renderCompta(root) {
       const pr = chat.proposals[el.dataset.prop];
       if (pr) expenseForm(null, { ...pr, source: 'claude' }, () => { pr.done = true; renderCompta(root); });
     } else if (el.dataset.act === 'new-exp') expenseForm(null);
+    else if (el.dataset.act === 'ledger-now') fire();
     else if (el.dataset.act === 'csv') {
       const { csv, rows } = journalCSV(year);
       if (!rows.length) { toast(`Aucune opération de l’appli à exporter pour ${year}.`); return; }
       await saveFile(`ecritures_horizon-blanc-403_${year}.csv`, csv);
     }
   };
+}
+
+function statusLine() {
+  const st = ledgerStatus();
+  if (st === 'attente') return '<button class="banner info" data-act="ledger-now">Saisies en attente de report au classeur · envoyer maintenant</button>';
+  if (st === 'envoye') return '<p class="banner info">Mise à jour du classeur en cours (quelques minutes)…</p>';
+  return '';
+}
+
+/** Saisies de l'appli non reportées, pour un mois "AAAA-MM". */
+function pendingMonth(ym) {
+  const exp = db().expenses.filter((e) => !e.ledgerEntry && e.date?.startsWith(ym) && !String(e.account).startsWith('2'))
+    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const rev = db().reservations.filter((r) => !r.ledgerEntry && isActive(r) && r.start?.startsWith(ym))
+    .reduce((s, r) => s + resNet(r), 0);
+  return { exp, rev };
+}
+
+function monthFigures(L, ym) {
+  let produits = 0, charges = 0;
+  for (const l of L.lines || []) {
+    if (!l.date.startsWith(ym)) continue;
+    if (l.account.startsWith('7')) produits += l.credit - l.debit;
+    else if (l.account.startsWith('6')) charges += l.debit - l.credit;
+  }
+  const p = pendingMonth(ym);
+  return { produits: produits + p.rev, charges: charges + p.exp, pending: p.rev || p.exp };
+}
+
+const fig = (label, value, cls = '') => `<div class="fig ${cls}"><small>${label}</small><strong>${money(value)}</strong></div>`;
+
+function monthCard(L, year) {
+  const cur = today().slice(0, 7);
+  if (!state.month || !state.month.startsWith(String(year))) state.month = cur.startsWith(String(year)) ? cur : `${year}-12`;
+  const ym = state.month;
+  const m = monthFigures(L, ym);
+  const r = m.produits - m.charges;
+  const label = new Date(`${ym}-01T00:00:00Z`).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  return `<div class="card period">
+    <div class="period-head">
+      <button class="icon-btn" data-month="-1" aria-label="Mois précédent"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+      <h3 class="card-title">${label.charAt(0).toUpperCase() + label.slice(1)}</h3>
+      <button class="icon-btn" data-month="1" aria-label="Mois suivant"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
+    </div>
+    <div class="figs">${fig('Produits', m.produits)}${fig('Charges', m.charges)}${fig('Résultat du mois', r, r < 0 ? 'neg' : 'pos')}</div>
+    ${m.pending ? '<small class="hint">Inclut des saisies de l’appli en cours de report au classeur.</small>' : ''}
+  </div>`;
+}
+
+function yearCard(L, year, p) {
+  const produits = L.produits + p.revenue;
+  const charges = L.charges + p.expenses;
+  const before = produits - charges;
+  const dot = Number(L.depreciation?.[String(year)]) || 0;
+  const net = before - dot;
+  return `<div class="card period">
+    <h3 class="card-title">Année ${year}</h3>
+    <div class="figs">${fig('Produits', produits)}${fig('Charges', charges)}${fig('Résultat net', net, net < 0 ? 'neg' : 'pos')}</div>
+    <ul class="kv">
+      <li><span>Résultat avant amortissements</span><span>${money(before)}</span></li>
+      <li><span>Amortissements de l’année (prévus au classeur)</span><span>−${money(dot)}</span></li>
+    </ul>
+    <small class="hint">Les amortissements sont passés au 31/12. Fiscalement, la part qui créerait ou aggraverait un déficit est reportée sans limite de durée.</small>
+  </div>`;
 }
 
 function bars(series) {
@@ -110,6 +175,7 @@ function bars(series) {
 }
 
 function syntheseLedger(year, L, totals, p) {
+  const top3 = monthCard(L, year) + yearCard(L, year, p);
   const series = MONTHS_SHORT.map((_, i) => {
     const m = L.months?.[`${year}-${String(i + 1).padStart(2, '0')}`] || {};
     return { inn: m.produits || 0, out: m.charges || 0 };
@@ -120,6 +186,7 @@ function syntheseLedger(year, L, totals, p) {
   const v = (meta.versions || []).find((x) => x.version === meta.currentVersion);
   const ok = L.journalGap === 0 && L.bankGap === 0;
   return `
+    ${top3}
     <div class="kpis">
       <div class="kpi"><small>Trésorerie (512100)</small><strong>${money(L.bank)}</strong></div>
       <div class="kpi"><small>Capital restant dû</small><strong>${money0(L.loanOutstanding)}</strong></div>

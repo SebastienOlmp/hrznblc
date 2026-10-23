@@ -96,6 +96,13 @@ section { display: flex; flex-direction: column; gap: 8px; }
 .result-band small { color: var(--muted); font: 600 .72rem/1 var(--display); letter-spacing: .1em; text-transform: uppercase; }
 .result-band strong { font: 700 2rem/1.1 var(--display); font-variant-numeric: tabular-nums; }
 .result-band span { color: var(--muted); font-size: .9rem; }
+.period-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.fig { display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: 10px; background: var(--surface-2); min-width: 0; }
+.fig small { color: var(--muted); font-size: .78rem; }
+.fig strong { font: 700 1.05rem/1.2 var(--display); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.fig.pos strong { color: var(--good); } .fig.neg strong { color: var(--bad); }
+.banner.info { background: var(--accent-soft); color: var(--accent); }
 .banner { display: block; width: 100%; text-align: left; padding: 10px 14px; border-radius: var(--radius); background: var(--warn-soft); color: var(--warn); border: 0; font-weight: 500; text-decoration: none; cursor: pointer; }
 
 /* Listes */
