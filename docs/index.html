@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Horizon Blanc 403</title>
+  <meta name="theme-color" content="#142033">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="HB 403">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <style>
+    :root { --bg: #142033; --fg: #f4f7fa; --muted: #a9b8cc; --accent: #6aa6e8; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; text-align: center;
+      padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); }
+    img { width: 112px; height: 112px; border-radius: 26px; box-shadow: 0 8px 30px rgb(0 0 0 / .35); }
+    h1 { margin: 0; font-size: 1.6rem; letter-spacing: .02em; }
+    p { margin: 0; color: var(--muted); max-width: 34ch; }
+    a.btn { display: inline-block; padding: 14px 26px; border-radius: 999px; background: var(--accent); color: var(--bg); font-weight: 700; text-decoration: none; }
+    .help { display: none; font-size: .9rem; }
+    .help strong { color: var(--fg); }
+    body.browser .help { display: block; }
+  </style>
+</head>
+<body>
+  <img src="icons/icon-512.png" alt="">
+  <h1>Horizon Blanc 403</h1>
+  <p id="status">Ouverture de l’appli…</p>
+  <a class="btn" id="open" href="https://claude.ai/artifact/QLgMhfTNkVTmYhtSndhjuZ">Ouvrir l’appli</a>
+  <p class="help" id="help"></p>
+  <script>
+    const APP = 'https://claude.ai/artifact/QLgMhfTNkVTmYhtSndhjuZ';
+    const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (standalone) {
+      // Lancé depuis l'icône : on ouvre directement l'appli (une seule fois, pour que « retour » ne boucle pas).
+      if (!sessionStorage.getItem('opened')) {
+        sessionStorage.setItem('opened', '1');
+        location.href = APP;
+      } else {
+        document.getElementById('status').textContent = 'Touchez le bouton pour revenir à l’appli.';
+      }
+    } else {
+      document.body.classList.add('browser');
+      document.getElementById('status').textContent = 'Installez l’icône sur votre écran d’accueil :';
+      document.getElementById('help').innerHTML = ios
+        ? 'Dans Safari, touchez <strong>Partager</strong> puis <strong>Sur l’écran d’accueil</strong>.'
+        : 'Dans Chrome, ouvrez le menu <strong>⋮</strong> puis <strong>Installer l’application</strong> (ou <strong>Ajouter à l’écran d’accueil</strong>).';
+    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  </script>
+</body>
+</html>

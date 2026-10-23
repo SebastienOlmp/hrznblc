@@ -29,3 +29,7 @@ Hors de claude.ai (aperçu local), l'appli bascule sur le `localStorage` du navi
 ## Tâche quotidienne
 
 Une tâche planifiée Claude (7 h 36, heure de Paris) lit les boîtes mail marquées « Liée » dans Réglages, écrit les factures à valider dans `inbox`, crée les décisions dans `tasks`, archive les mails traités sous le libellé `HB403` et, le lundi, met à jour la veille marché (`config/market`).
+
+## Lanceur (icône sur le téléphone)
+
+Le dossier `docs/` contient une petite appli installable (PWA) avec l'icône « HB 403 ». Lancée depuis l'écran d'accueil, elle ouvre l'appli sur claude.ai. Pour la mettre en ligne : GitHub › Settings › Pages › Source « Deploy from a branch », branche `claude/app-horizon-blanc`, dossier `/docs`. GitHub Pages sur un dépôt privé demande un abonnement GitHub payant ; sinon, rendre le dépôt public (il ne contient aucune donnée personnelle).
