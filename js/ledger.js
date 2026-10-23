@@ -15,7 +15,9 @@ export function ledgerStatus() {
   if (reasons.size) return 'attente';
   const req = db().ledgerRequest?.requestedAt;
   const meta = db().ledger || {};
-  const last = [meta.lastCheck, ...(meta.versions || []).map((v) => v.updatedAt)].filter(Boolean).sort().pop() || '';
+  // Une date seule (AAAA-MM-JJ) vaut pour toute la journée.
+  const full = (d) => (d && d.length === 10 ? `${d}T23:59:59Z` : d);
+  const last = [full(meta.lastCheck), ...(meta.versions || []).map((v) => v.updatedAt)].filter(Boolean).sort().pop() || '';
   return req && req > last ? 'envoye' : null;
 }
 
