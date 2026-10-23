@@ -1,74 +1,195 @@
 // Onglet COMPTA : résultat net, dépenses, éléments détectés dans les mails à valider, assistant Claude.
 import { esc, money, money0, pct, fmtDate, MONTHS_SHORT, plural, today, num } from '../utils.js';
-import { db, upsert, yearStats, yearsWithData, EXPENSE_ACCOUNTS, accountLabel } from '../store.js';
+import { db, upsert, yearStats, yearsWithData, EXPENSE_ACCOUNTS, accountLabel, isActive, resNet } from '../store.js';
 import { expenseForm } from './forms.js';
 import { empty, saveFile, toast } from '../ui.js';
 import { journalCSV } from '../compta.js';
 
-const state = { year: new Date().getFullYear(), tab: 'synthese' };
+const state = { year: new Date().getFullYear(), tab: 'synthese', account: null };
 const chat = { turns: [], busy: false, ctl: null, proposals: {}, draft: '' };
 
 export const pendingInbox = () => db().inbox.filter((x) => x.status === 'a_valider' && x.proposal);
 
+/** Chiffres du classeur maître pour l'exercice affiché, ou null si le classeur ne couvre pas cette année. */
+function ledgerFor(year) {
+  const L = db().ledgerSummary || {};
+  return L.lines?.length && Number(String(L.exerciseEnd || '').slice(0, 4)) === year ? L : null;
+}
+
+/** Opérations saisies dans l'appli et pas encore reportées au classeur (évite le double comptage). */
+function pendingFor(year) {
+  const y = String(year);
+  const exp = db().expenses.filter((e) => !e.ledgerEntry && e.date?.startsWith(y) && !String(e.account).startsWith('2'));
+  const res = db().reservations.filter((r) => !r.ledgerEntry && isActive(r) && r.start?.startsWith(y));
+  return {
+    expenses: exp.reduce((s, e) => s + (Number(e.amount) || 0), 0), nExp: exp.length,
+    revenue: res.reduce((s, r) => s + resNet(r), 0), nRes: res.length,
+  };
+}
+
 export function renderCompta(root) {
-  const { year, tab } = state;
+  const { year } = state;
+  const L = ledgerFor(year);
+  if (state.tab === 'journal' && !L) state.tab = 'synthese';
+  const { tab } = state;
   const { months, totals } = yearStats(year);
   const years = yearsWithData();
+  if (L && !years.includes(year)) years.unshift(year);
   if (!years.includes(year)) years.unshift(year);
   const expenses = db().expenses.filter((e) => e.date?.startsWith(String(year))).sort((a, b) => b.date.localeCompare(a.date));
   const pending = pendingInbox();
+  const p = pendingFor(year);
 
+  let band;
+  if (L) {
+    const withPending = L.result + p.revenue - p.expenses;
+    const hasPending = p.nExp || p.nRes;
+    band = `<div class="result-band ${L.result < 0 ? 'neg' : 'pos'}">
+      <small>Résultat ${year} au classeur · avant amortissements</small>
+      <strong>${money(L.result)}</strong>
+      <span>${money0(L.produits)} de produits − ${money0(L.charges)} de charges</span>
+      ${hasPending ? `<span>Avec ${p.nExp + p.nRes} opération${p.nExp + p.nRes > 1 ? 's' : ''} de l’appli pas encore reportée${p.nExp + p.nRes > 1 ? 's' : ''} : <b>${money(withPending)}</b></span>` : ''}
+    </div>`;
+  } else {
+    band = `<div class="result-band ${totals.result < 0 ? 'neg' : 'pos'}">
+      <small>Résultat ${year} selon l’appli · avant amortissements</small>
+      <strong>${money0(totals.result)}</strong>
+      <span>${money0(totals.net)} de recettes nettes − ${money0(totals.expenses)} de charges</span>
+    </div>`;
+  }
+
+  const tabs = [['synthese', 'Synthèse'], ...(L ? [['journal', 'Journal']] : []), ['valider', `À valider${pending.length ? ` (${pending.length})` : ''}`], ['depenses', 'Dépenses'], ['claude', 'Claude']];
   root.innerHTML = `
     <header class="top">
       <div><p class="eyebrow">Compta</p><h1>Exercice ${year}</h1></div>
       <select class="year-select" id="compta-year" aria-label="Exercice">${years.map((y) => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select>
     </header>
-    <div class="result-band ${totals.result < 0 ? 'neg' : 'pos'}">
-      <small>Résultat avant amortissements</small>
-      <strong>${money0(totals.result)}</strong>
-      <span>${money0(totals.net)} de recettes nettes − ${money0(totals.expenses)} de charges</span>
-    </div>
+    ${band}
     <div class="segmented">
-      ${[['synthese', 'Synthèse'], ['valider', `À valider${pending.length ? ` (${pending.length})` : ''}`], ['depenses', 'Dépenses'], ['claude', 'Claude']]
-        .map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
+      ${tabs.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
     </div>
     <div id="compta-body"></div>
   `;
   const body = root.querySelector('#compta-body');
-  if (tab === 'synthese') body.innerHTML = synthese(year, months, totals, expenses);
+  if (tab === 'synthese') body.innerHTML = L ? syntheseLedger(year, L, totals, p) : synthese(year, months, totals, expenses);
+  else if (tab === 'journal') body.innerHTML = journalView(L);
   else if (tab === 'valider') body.innerHTML = valider(pending);
   else if (tab === 'depenses') body.innerHTML = depenses(year, expenses);
   else renderChat(body);
 
   root.querySelector('#compta-year').onchange = (e) => { state.year = Number(e.target.value); renderCompta(root); };
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tab],[data-exp],[data-act],[data-inbox],[data-ignore],[data-prop]');
+    const el = e.target.closest('[data-tab],[data-exp],[data-act],[data-inbox],[data-ignore],[data-prop],[data-acc]');
     if (!el) return;
-    if (el.dataset.tab) { state.tab = el.dataset.tab; renderCompta(root); }
+    if (el.dataset.tab) { state.tab = el.dataset.tab; state.account = null; renderCompta(root); }
+    else if (el.dataset.acc !== undefined) { state.tab = 'journal'; state.account = el.dataset.acc || null; renderCompta(root); window.scrollTo(0, 0); }
     else if (el.dataset.exp) expenseForm(db().expenses.find((x) => x.id === el.dataset.exp));
     else if (el.dataset.inbox) validateInbox(el.dataset.inbox);
     else if (el.dataset.ignore) {
       const item = db().inbox.find((x) => x.id === el.dataset.ignore);
       if (item) { upsert('inbox', { ...item, status: 'ignore' }); toast('Ignoré'); }
     } else if (el.dataset.prop) {
-      const p = chat.proposals[el.dataset.prop];
-      if (p) expenseForm(null, { ...p, source: 'claude' }, () => { p.done = true; renderCompta(root); });
+      const pr = chat.proposals[el.dataset.prop];
+      if (pr) expenseForm(null, { ...pr, source: 'claude' }, () => { pr.done = true; renderCompta(root); });
     } else if (el.dataset.act === 'new-exp') expenseForm(null);
     else if (el.dataset.act === 'csv') {
       const { csv, rows } = journalCSV(year);
-      if (!rows.length) { toast(`Aucune écriture pour ${year}.`); return; }
+      if (!rows.length) { toast(`Aucune opération de l’appli à exporter pour ${year}.`); return; }
       await saveFile(`ecritures_horizon-blanc-403_${year}.csv`, csv);
     }
   };
 }
 
-function synthese(year, months, totals, expenses) {
-  const max = Math.max(1, ...months.map((x) => Math.max(x.net, x.expenses)));
-  const bars = months.map((x, i) => `
-    <div class="bar-col" title="${MONTHS_SHORT[i]} : ${money0(x.net)} / ${money0(x.expenses)}">
-      <div class="bars"><i class="b-in" style="height:${(x.net / max) * 100}%"></i><i class="b-out" style="height:${(x.expenses / max) * 100}%"></i></div>
+function bars(series) {
+  const max = Math.max(1, ...series.map((x) => Math.max(x.inn, x.out)));
+  return series.map((x, i) => `
+    <div class="bar-col" title="${MONTHS_SHORT[i]} : ${money0(x.inn)} / ${money0(x.out)}">
+      <div class="bars"><i class="b-in" style="height:${(x.inn / max) * 100}%"></i><i class="b-out" style="height:${(x.out / max) * 100}%"></i></div>
       <small>${MONTHS_SHORT[i].charAt(0).toUpperCase()}</small>
     </div>`).join('');
+}
+
+function syntheseLedger(year, L, totals, p) {
+  const series = MONTHS_SHORT.map((_, i) => {
+    const m = L.months?.[`${year}-${String(i + 1).padStart(2, '0')}`] || {};
+    return { inn: m.produits || 0, out: m.charges || 0 };
+  });
+  const charges = (L.accounts || []).filter((a) => a.code.startsWith('6') && a.balance).sort((a, b) => b.balance - a.balance);
+  const top = charges[0]?.balance || 1;
+  const meta = db().ledger || {};
+  const v = (meta.versions || []).find((x) => x.version === meta.currentVersion);
+  const ok = L.journalGap === 0 && L.bankGap === 0;
+  return `
+    <div class="kpis">
+      <div class="kpi"><small>Trésorerie (512100)</small><strong>${money(L.bank)}</strong></div>
+      <div class="kpi"><small>Capital restant dû</small><strong>${money0(L.loanOutstanding)}</strong></div>
+      <div class="kpi"><small>Apports nets de l’exploitant (108000)</small><strong>${money0(L.ownerAccount)}</strong></div>
+      <div class="kpi"><small>Dû à Régine (467600)</small><strong>${money(L.owedToRegine)}</strong></div>
+      <div class="kpi"><small>Immobilisations brutes</small><strong>${money0(L.fixedAssets)}</strong></div>
+      <div class="kpi"><small>Occupation ${year}</small><strong>${pct(totals.occupancy)}</strong><em>${plural(totals.nights, 'nuit', 'nuits')}</em></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Par mois (classeur)</h3>
+      <div class="chart">${bars(series)}</div>
+      <div class="legend"><span><i class="dot b-in"></i>Produits</span><span><i class="dot b-out"></i>Charges</span></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Charges par compte (classeur)</h3>
+      ${charges.length ? `<ul class="cats">${charges.map((a) => `<li class="clickable" data-acc="${a.code}"><span><code>${a.code}</code> ${esc(a.label)}</span><span>${money(a.balance)}</span><i style="width:${(a.balance / top) * 100}%"></i></li>`).join('')}</ul>` : '<p class="hint">Aucune charge.</p>'}
+      <small class="hint">Touchez un compte pour voir ses écritures.</small>
+    </div>
+    ${p.nExp || p.nRes ? `<div class="card warn-card">
+      <h3 class="card-title">Saisies de l’appli pas encore au classeur</h3>
+      <ul class="kv">
+        ${p.nRes ? `<li><span>${plural(p.nRes, 'séjour', 'séjours')} (net)</span><span>+${money(p.revenue)}</span></li>` : ''}
+        ${p.nExp ? `<li><span>${plural(p.nExp, 'dépense', 'dépenses')}</span><span>−${money(p.expenses)}</span></li>` : ''}
+      </ul>
+      <small class="hint">Reportées automatiquement le dimanche, une fois validées.</small>
+    </div>` : ''}
+    <div class="card">
+      <h3 class="card-title">Classeur maître</h3>
+      <ul class="kv">
+        <li><span>Version</span><span>${meta.currentVersion || '—'}${v ? ` · ${fmtDate(v.updatedAt.slice(0, 10), { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}</span></li>
+        <li><span>Dernière écriture</span><span>n° ${meta.lastEntryNo ?? '—'} · pièce ${esc(meta.lastPiece || '—')}</span></li>
+        <li><span>Dernier relevé rapproché</span><span>${meta.lastBankStatement ? fmtDate(meta.lastBankStatement, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</span></li>
+        <li><span>Contrôles (journal équilibré, banque rapprochée)</span><span class="${ok ? 'pos' : 'neg'}">${ok ? 'OK' : 'Écart à corriger'}</span></li>
+      </ul>
+      <small class="hint">Chiffres repris du fichier Excel, mis à jour à chaque nouvelle version. Pour recevoir le fichier : « envoie-moi le classeur comptable maître à jour » dans une conversation Claude Code.</small>
+    </div>
+  `;
+}
+
+function journalView(L) {
+  const acc = state.account;
+  const lines = (L.lines || []).filter((l) => !acc || l.account === acc);
+  if (acc) {
+    let run = 0;
+    const label = lines[0]?.accountLabel || accountLabel(acc);
+    return `
+      <div class="card-head"><h2 class="section-title">Compte ${esc(acc)} · ${esc(label)}</h2><button class="link" data-acc="">Tout le journal</button></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Date</th><th>N°</th><th>Libellé</th><th>Débit</th><th>Crédit</th><th>Solde</th></tr></thead>
+        <tbody>${lines.map((l) => { run += l.debit - l.credit; return `<tr><td>${fmtDate(l.date, { day: '2-digit', month: '2-digit', year: '2-digit' })}</td><td>${l.no}</td><td>${esc(l.label)}</td><td>${l.debit ? money(l.debit) : ''}</td><td>${l.credit ? money(l.credit) : ''}</td><td>${money(run)}</td></tr>`; }).join('')}</tbody>
+      </table></div>`;
+  }
+  const groups = [];
+  for (const l of lines) {
+    const g = groups[groups.length - 1];
+    if (g && g.no === l.no) g.lines.push(l); else groups.push({ no: l.no, date: l.date, journal: l.journal, piece: l.piece, ref: l.ref, lines: [l] });
+  }
+  return `<div class="list">${groups.slice().reverse().map((g) => `
+    <div class="item static entry">
+      <span class="item-main">
+        <strong>${g.no} · ${esc(g.ref || g.lines[0].label)}</strong>
+        <small>${fmtDate(g.date, { day: 'numeric', month: 'short', year: 'numeric' })} · journal ${esc(g.journal)} · pièce ${esc(g.piece)}</small>
+        <table class="mini">${g.lines.map((l) => `<tr data-acc="${l.account}" class="clickable"><td><code>${l.account}</code></td><td>${esc(l.label)}</td><td>${l.debit ? money(l.debit) : ''}</td><td>${l.credit ? money(l.credit) : ''}</td></tr>`).join('')}</table>
+      </span>
+    </div>`).join('')}</div>
+    <p class="hint">Lecture seule : le journal du classeur maître. Touchez un compte pour voir son grand livre.</p>`;
+}
+
+function synthese(year, months, totals, expenses) {
+  
   const byAcc = {};
   expenses.filter((e) => !String(e.account).startsWith('2')).forEach((e) => { byAcc[e.account] = (byAcc[e.account] || 0) + (Number(e.amount) || 0); });
   const accs = Object.entries(byAcc).sort((a, b) => b[1] - a[1]);
@@ -83,7 +204,7 @@ function synthese(year, months, totals, expenses) {
     </div>
     <div class="card">
       <h3 class="card-title">Par mois</h3>
-      <div class="chart">${bars}</div>
+      <div class="chart">${bars(months.map((x) => ({ inn: x.net, out: x.expenses })))}</div>
       <div class="legend"><span><i class="dot b-in"></i>Recettes nettes</span><span><i class="dot b-out"></i>Charges</span></div>
     </div>
     <div class="card">
@@ -92,28 +213,9 @@ function synthese(year, months, totals, expenses) {
       ${immo.length ? `<p class="hint">Acquisitions immobilisées (hors résultat, à amortir dans le classeur) : ${money(immo.reduce((s, e) => s + (Number(e.amount) || 0), 0))}</p>` : ''}
     </div>
     ${regine.length ? `<div class="card warn-card"><h3 class="card-title">Avances de Régine à rembourser (467600)</h3><p class="big">${money(regine.reduce((s, e) => s + (Number(e.amount) || 0), 0))}</p><small class="hint">${plural(regine.length, 'dépense', 'dépenses')} non remboursée${regine.length > 1 ? 's' : ''}.</small></div>` : ''}
-    ${ledgerCard()}
     <button class="btn block" data-act="csv">Exporter les écritures ${year} (CSV pour le classeur)</button>
     <p class="hint">Résultat calculé avant amortissements et intérêts d’emprunt non saisis : la liasse se fait depuis le classeur Excel. Recettes réparties au prorata des nuits ; séjours à cheval sur deux exercices traités en PCA (487000) dans l’export.</p>
   `;
-}
-
-function ledgerCard() {
-  const l = db().ledger || {};
-  const v = (l.versions || []).find((x) => x.version === l.currentVersion);
-  if (!v) return '';
-  const waiting = db().expenses.filter((e) => !e.ledgerEntry).length;
-  return `<div class="card">
-    <h3 class="card-title">Classeur maître (Excel)</h3>
-    <ul class="kv">
-      <li><span>Version</span><span>${l.currentVersion} · ${fmtDate(v.updatedAt.slice(0, 10), { day: 'numeric', month: 'short', year: 'numeric' })}</span></li>
-      <li><span>Dernière écriture</span><span>n° ${l.lastEntryNo} · pièce ${esc(l.lastPiece || '')}</span></li>
-      <li><span>Dernier relevé rapproché</span><span>${l.lastBankStatement ? fmtDate(l.lastBankStatement, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'} · ${money(l.bankBalance)}</span></li>
-      <li><span>Résultat au classeur (avant amortissements)</span><span>${money(l.resultBeforeDepreciation)}</span></li>
-      <li><span>Dépenses de l’appli pas encore reportées</span><span>${waiting}</span></li>
-    </ul>
-    <small class="hint">Claude tient ce fichier à jour à partir de l’appli. Pour le recevoir, demandez-le dans une conversation Claude Code : « envoie-moi la compta à jour ».</small>
-  </div>`;
 }
 
 function valider(pending) {

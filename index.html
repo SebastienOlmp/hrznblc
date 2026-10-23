@@ -190,6 +190,10 @@ section { display: flex; flex-direction: column; gap: 8px; }
 .table input { width: 20px; height: 20px; accent-color: var(--accent); }
 .clickable { cursor: pointer; }
 .clickable:hover { background: var(--surface-2); }
+.mini { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: .82rem; font-variant-numeric: tabular-nums; }
+.mini td { padding: 3px 6px 3px 0; border-top: 1px solid var(--line); vertical-align: top; }
+.mini td:nth-child(3), .mini td:nth-child(4) { text-align: right; white-space: nowrap; }
+.result-band b { color: var(--ink); }
 
 /* Discussions, fiche, divers */
 .chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }

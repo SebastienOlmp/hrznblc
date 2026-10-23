@@ -103,13 +103,14 @@ const empty = () => ({
   inbox: [], // éléments détectés dans les mails par la tâche planifiée, à valider
   bank: [], // lignes de relevé importées
   pricing: [], // grille tarifaire : une ligne par semaine
+  ledgerSummary: {}, // chiffres extraits du classeur : soldes, mois, lignes du journal
   ledger: {}, // état du classeur Excel maître (lecture seule, tenu par Claude)
   market: {}, // veille marché écrite par la tâche planifiée : { updatedAt, summary, comparables: [] }
   taxLog: {}, // { '2026-12': true (déclaration mensuelle faite), 'R2026-3': true (reversement fait) }
 });
 
 export const COLLECTIONS = ['reservations', 'expenses', 'contacts', 'tasks', 'deadlines', 'checklists', 'documents', 'inbox', 'bank', 'pricing'];
-const CONFIG_DOCS = { settings: 'config/settings', property: 'config/property', taxLog: 'config/taxlog', market: 'config/market', ledger: 'ledger/meta' };
+const CONFIG_DOCS = { settings: 'config/settings', property: 'config/property', taxLog: 'config/taxlog', market: 'config/market', ledger: 'ledger/meta', ledgerSummary: 'ledger/summary' };
 
 function normalize(raw) {
   const base = empty();
@@ -205,6 +206,7 @@ export async function connect(onFirstData) {
         else if (k === 'property') data.property = { sections: Array.isArray(v.sections) ? v.sections : [] };
         else if (k === 'market') data.market = { ...v };
         else if (k === 'ledger') data.ledger = { ...v };
+        else if (k === 'ledgerSummary') data.ledgerSummary = { ...v };
         else data.taxLog = { ...v };
         loaded(k);
         notify();
