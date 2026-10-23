@@ -103,6 +103,8 @@ const empty = () => ({
   inbox: [], // éléments détectés dans les mails par la tâche planifiée, à valider
   bank: [], // lignes de relevé importées
   pricing: [], // grille tarifaire : une ligne par semaine
+  vault: [], // coffre de documents : une fiche par fichier archivé (privé)
+  famille: [], // dette personnelle envers Régine, hors comptabilité (privé)
   chat: [], // fil de discussion Compta (messages, pièces jointes)
   ledgerSummary: {}, // chiffres extraits du classeur : soldes, mois, lignes du journal
   ledger: {}, // état du classeur Excel maître (lecture seule, tenu par Claude)
@@ -110,7 +112,7 @@ const empty = () => ({
   taxLog: {}, // { '2026-12': true (déclaration mensuelle faite), 'R2026-3': true (reversement fait) }
 });
 
-export const COLLECTIONS = ['reservations', 'expenses', 'contacts', 'tasks', 'deadlines', 'checklists', 'documents', 'inbox', 'bank', 'pricing'];
+export const COLLECTIONS = ['reservations', 'expenses', 'contacts', 'tasks', 'deadlines', 'checklists', 'documents', 'inbox', 'bank', 'pricing', 'vault', 'famille'];
 const CONFIG_DOCS = { settings: 'config/settings', property: 'config/property', taxLog: 'config/taxlog', market: 'config/market', ledger: 'ledger/meta', ledgerSummary: 'ledger/summary', ledgerRequest: 'ledger/request' };
 
 function normalize(raw) {

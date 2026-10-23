@@ -3,6 +3,7 @@ import { esc, money, fmtDate, plural, today } from '../utils.js';
 import { db, settings, isActive, sortedReservations, winterSeason, resConcierge, CLEANING, WELCOME, DEPOSIT } from '../store.js';
 import { reservationForm, guestName } from './forms.js';
 import { empty } from '../ui.js';
+import { sendDocButton, bindSendDoc } from '../vault.js';
 
 const now = new Date();
 const state = { season: now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1 };
@@ -30,6 +31,7 @@ export function renderConciergerie(root) {
       </div>
     </header>
 
+    ${sendDocButton('Conciergerie', 'Conciergerie', 'Envoyer un contrat, une facture ou un courrier')}
     <div class="card">
       <h3 class="card-title">Saison d’hiver ${y}-${y + 1} · minimum contractuel (article 8)</h3>
       <div class="meter"><i style="width:${Math.min(100, (count / min) * 100)}%"></i></div>
@@ -68,6 +70,7 @@ export function renderConciergerie(root) {
       <small class="hint">Pas de mandat d’encaissement : sur les canaux directs, le voyageur règle tout par virement avant l’arrivée. Départ le dimanche : +30 % chez la conciergerie.</small>
     </div>
   `;
+  bindSendDoc(root);
   root.onclick = (e) => {
     const el = e.target.closest('[data-season],[data-res]');
     if (!el) return;

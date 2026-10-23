@@ -14,6 +14,8 @@ import { renderTaxe } from './views/taxe.js';
 import { renderBanque } from './views/banque.js';
 import { renderTarification } from './views/tarification.js';
 import { renderReglages } from './views/reglages.js';
+import { renderDocuments } from './vault.js';
+import { renderFamille } from './views/famille.js';
 
 const VIEWS = {
   planning: renderCalendar,
@@ -27,14 +29,18 @@ const VIEWS = {
   banque: renderBanque,
   tarification: renderTarification,
   reglages: renderReglages,
+  documents: renderDocuments,
+  famille: renderFamille,
 };
 const MAIN_TABS = ['planning', 'compta', 'todo', 'discussions'];
 const MORE = [
+  ['documents', 'Documents', 'Coffre : toutes les pièces, classeur Excel, export'],
   ['juridique', 'Juridique', 'Fiche du bien, documents, échéances'],
   ['conciergerie', 'Conciergerie', 'Prestations, minimum hiver, cautions'],
   ['taxe', 'Taxe de séjour', 'Nuitées, déclarations, reversements'],
   ['banque', 'Banque', 'Relevé, rapprochement, emprunt'],
   ['tarification', 'Tarification', 'Grille, historique, veille'],
+  ['famille', 'Dette Régine', 'Hors compta : prêts et remboursements'],
   ['reglages', 'Réglages', 'Boîtes mail, taux, tarifs, sauvegarde'],
 ];
 

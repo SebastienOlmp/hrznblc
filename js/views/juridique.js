@@ -2,6 +2,8 @@
 import { esc, today, fmtDate, nightsBetween } from '../utils.js';
 import { db, upsert, remove, byId, setProperty } from '../store.js';
 import { openSheet, field, row, toast, ask, empty } from '../ui.js';
+import { sendDocButton, bindSendDoc } from '../vault.js';
+import { renderChat } from './compta.js';
 
 const state = { tab: 'fiche' };
 
@@ -51,12 +53,15 @@ export function renderJuridique(root) {
   }
 
   root.innerHTML = `
-    <header class="top"><div><p class="eyebrow">Juridique</p><h1>Le bien et ses obligations</h1></div></header>
+    <header class="top"><div><p class="eyebrow">Juridique et administratif</p><h1>Le bien et ses obligations</h1></div></header>
+    ${sendDocButton('Juridique', 'À classer', 'Envoyer un courrier ou un contrat (photo, PDF)')}
     <div class="segmented">
-      ${[['fiche', 'Fiche du bien'], ['docs', `Documents (${docs.length})`], ['dates', 'Échéances']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
+      ${[['fiche', 'Fiche du bien'], ['docs', `Documents (${docs.length})`], ['dates', 'Échéances'], ['chat', 'Chat Claude']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
     </div>
-    ${body}
+    <div id="jur-body">${tab === 'chat' ? '' : body}</div>
   `;
+  bindSendDoc(root);
+  if (tab === 'chat') renderChat(root.querySelector('#jur-body'), 'juridique');
   root.onclick = (e) => {
     const el = e.target.closest('[data-tab],[data-sec],[data-doc],[data-dl],[data-dl-tick]');
     if (!el) return;

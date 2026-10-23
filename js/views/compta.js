@@ -2,7 +2,8 @@
 import { esc, money, money0, pct, fmtDate, MONTHS_SHORT, plural, today, num } from '../utils.js';
 import { db, upsert, yearStats, yearsWithData, EXPENSE_ACCOUNTS, accountLabel, isActive, resNet, saveChatMessage } from '../store.js';
 import { expenseForm } from './forms.js';
-import { empty, saveFile, toast, uploadFile, attachmentLinks } from '../ui.js';
+import { empty, saveFile, toast, attachmentLinks } from '../ui.js';
+import { archiveFile, downloadWorkbook } from '../vault.js';
 import { journalCSV } from '../compta.js';
 import { ledgerStatus, fire } from '../ledger.js';
 
@@ -92,6 +93,7 @@ export function renderCompta(root) {
       if (item) { upsert('inbox', { ...item, status: 'ignore' }); toast('Ignoré'); }
     } else if (el.dataset.act === 'new-exp') expenseForm(null);
     else if (el.dataset.act === 'ledger-now') fire();
+    else if (el.dataset.act === 'xlsx') downloadWorkbook();
     else if (el.dataset.act === 'csv') {
       const { csv, rows } = journalCSV(year);
       if (!rows.length) { toast(`Aucune opération de l’appli à exporter pour ${year}.`); return; }
@@ -220,7 +222,8 @@ function syntheseLedger(year, L, totals, p) {
         <li><span>Dernier relevé rapproché</span><span>${meta.lastBankStatement ? fmtDate(meta.lastBankStatement, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</span></li>
         <li><span>Contrôles (journal équilibré, banque rapprochée)</span><span class="${ok ? 'pos' : 'neg'}">${ok ? 'OK' : 'Écart à corriger'}</span></li>
       </ul>
-      <small class="hint">Chiffres repris du fichier Excel, mis à jour à chaque nouvelle version. Pour recevoir le fichier : « envoie-moi le classeur comptable maître à jour » dans une conversation Claude Code.</small>
+      <button class="btn primary" data-act="xlsx">Télécharger le classeur Excel</button>
+      <small class="hint">Chiffres repris du fichier Excel, mis à jour à chaque nouvelle version. Le fichier est aussi dans Plus › Documents.</small>
     </div>
   `;
 }
@@ -343,7 +346,7 @@ const isoOr = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d : today());
 /** Photo ou PDF de facture : archivage, lecture par Claude si c'est une image, puis formulaire pré-rempli. */
 export async function scanInvoice(file) {
   toast('Archivage de la pièce…');
-  const att = await uploadFile(file);
+  const att = await archiveFile(file, { folder: 'Compta/Factures', origin: 'Compta › Scanner' });
   if (!att) return;
   const base = { attachments: [att], source: 'scan' };
   const sample = await getSample();
@@ -436,7 +439,7 @@ Quand l'utilisateur envoie une capture de relevé bancaire, termine par la liste
 (montant négatif pour un débit). N'invente aucun chiffre illisible.`;
 
 function parseBlocks(text) {
-  const out = { text, proposal: null, bankLines: null };
+  const out = { text, proposal: null, bankLines: null, task: null };
   const grab = (tag) => {
     const m = out.text.match(new RegExp('```' + tag + '\\s*([\\s\\S]*?)```'));
     if (!m) return null;
@@ -444,12 +447,14 @@ function parseBlocks(text) {
     try { return JSON.parse(m[1]); } catch { return null; }
   };
   out.proposal = grab('depense');
+  const t = grab('tache');
+  out.task = t && t.title ? t : null;
   const bank = grab('banque');
   out.bankLines = Array.isArray(bank) ? bank.filter((l) => /^\d{4}-\d{2}-\d{2}$/.test(l?.date || '') && Number(l?.amount)) : null;
   return out;
 }
 
-const chat = { busy: false, ctl: null, draft: '', files: [], live: '' };
+const chat = { busy: false, ctl: null, draft: '', files: [], live: '', thread: 'compta' };
 
 const ERRORS = {
   not_granted: 'Accès à Claude refusé pour cette appli. Autorisez-le dans le menu Permissions de l’artifact.',
@@ -472,18 +477,24 @@ function messageHtml(m) {
       <div><strong>${esc(p.label)}</strong><small>${fmtDate(p.date, { day: 'numeric', month: 'short', year: 'numeric' })} · <code>${esc(p.account)}</code> ${esc(accountLabel(p.account))}</small>${p.why ? `<small class="warn-text">${esc(p.why)}</small>` : ''}</div>
       <div class="item-side"><span>${money(p.amount)}</span>${m.proposalDone ? '<span class="badge">Enregistrée</span>' : `<button class="btn small primary" data-prop="${m.id}">Vérifier et enregistrer</button>`}</div>
     </div>` : ''}
+    ${m.task ? `<div class="proposal ${m.taskDone ? 'done' : ''}"><div><strong>${esc(m.task.title)}</strong><small>${m.task.date ? `Échéance ${fmtDate(m.task.date, { day: 'numeric', month: 'long', year: 'numeric' })}` : 'Sans échéance'}</small></div>
+      <div class="item-side">${m.taskDone ? '<span class="badge">Dans la To do</span>' : `<button class="btn small primary" data-task="${m.id}">Ajouter à la To do</button>`}</div></div>` : ''}
     ${bank?.length ? `<div class="proposal ${m.bankDone ? 'done' : ''}"><div><strong>${bank.length} opération${bank.length > 1 ? 's' : ''} lue${bank.length > 1 ? 's' : ''} sur le relevé</strong><small>${bank.slice(0, 4).map((l) => `${fmtDate(l.date, { day: '2-digit', month: '2-digit' })} ${esc(l.label)} ${money(l.amount)}`).join(' · ')}${bank.length > 4 ? '…' : ''}</small></div>
       <div class="item-side">${m.bankDone ? '<span class="badge">Ajoutées</span>' : `<button class="btn small primary" data-bank="${m.id}">Ajouter au relevé</button>`}</div></div>` : ''}
   </div>`;
 }
 
-export function renderChat(body) {
-  const msgs = (db().chat || []).slice(-80);
+const threadMsgs = (thread) => (db().chat || []).filter((m) => (m.thread || 'compta') === thread);
+
+export function renderChat(body, thread = 'compta') {
+  if (chat.thread !== thread) { chat.thread = thread; chat.draft = ''; chat.files = []; }
+  const msgs = threadMsgs(thread).slice(-80);
   body.innerHTML = `
     <div class="chat" id="chat-log">
       ${msgs.length ? '' : `<div class="chat-hello">
-        <p><strong>Votre espace compta avec Claude.</strong></p>
-        <p class="hint">Posez une question, envoyez une facture, une capture de relevé bancaire ou tout justificatif. Exemples : « Où passe l’assurance emprunteur ? », « J’ai payé 89 € de linge chez Ikea le 3 novembre, avancé par Régine ». La conversation et les pièces sont conservées.</p>
+        ${thread === 'compta' ? `<p><strong>Votre espace compta avec Claude.</strong></p>
+        <p class="hint">Posez une question, envoyez une facture, une capture de relevé bancaire ou tout justificatif. Exemples : « Où passe l’assurance emprunteur ? », « J’ai payé 89 € de linge chez Ikea le 3 novembre, avancé par Régine ». La conversation et les pièces sont conservées.</p>` : `<p><strong>Juridique, administratif, conciergerie : parlez-en à Claude.</strong></p>
+        <p class="hint">Envoyez la photo d’un courrier, d’une mise en demeure, d’un contrat ou d’un avenant, et posez vos questions. Claude explique la démarche et peut l’ajouter à votre To do. Tout est conservé dans le coffre.</p>`}
       </div>`}
       ${msgs.map(messageHtml).join('')}
       ${chat.busy ? `<div class="bubble ${chat.live ? '' : 'thinking'}" id="chat-live">${esc(chat.live || 'Réflexion…')}</div>` : ''}
@@ -506,13 +517,14 @@ export function renderChat(body) {
   input.addEventListener('input', () => { chat.draft = input.value; });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
   body.querySelector('#chat-stop')?.addEventListener('click', () => chat.ctl?.abort());
-  body.querySelector('#chat-files').addEventListener('change', (e) => { chat.files.push(...e.target.files); renderChat(body); });
-  form.addEventListener('submit', (e) => { e.preventDefault(); if (input.value.trim() || chat.files.length) send(body, input.value.trim()); });
+  body.querySelector('#chat-files').addEventListener('change', (e) => { chat.files.push(...e.target.files); renderChat(body, thread); });
+  form.addEventListener('submit', (e) => { e.preventDefault(); if (input.value.trim() || chat.files.length) send(body, input.value.trim(), thread); });
   body.onclick = (e) => {
-    const el = e.target.closest('[data-unfile],[data-prop],[data-bank]');
+    const el = e.target.closest('[data-unfile],[data-prop],[data-bank],[data-task]');
     if (!el) return;
     e.stopPropagation();
-    if (el.dataset.unfile) { chat.files.splice(Number(el.dataset.unfile), 1); renderChat(body); }
+    if (el.dataset.unfile) { chat.files.splice(Number(el.dataset.unfile), 1); renderChat(body, thread); }
+    else if (el.dataset.task) acceptTask(el.dataset.task);
     else if (el.dataset.prop) acceptProposal(el.dataset.prop);
     else if (el.dataset.bank) acceptBank(el.dataset.bank);
   };
@@ -533,6 +545,35 @@ function acceptProposal(id) {
   }, () => saveChatMessage({ ...m, proposalDone: true }));
 }
 
+function acceptTask(id) {
+  const m = (db().chat || []).find((x) => x.id === id);
+  if (!m?.task) return;
+  const now = new Date().toISOString();
+  upsert('tasks', {
+    title: String(m.task.title), kind: ['decision', 'action', 'admin', 'entretien'].includes(m.task.kind) ? m.task.kind : 'admin',
+    priority: ['haute', 'normale', 'basse'].includes(m.task.priority) ? m.task.priority : 'normale',
+    date: /^\d{4}-\d{2}-\d{2}$/.test(m.task.date || '') ? m.task.date : '', status: 'todo', notes: String(m.task.notes || ''),
+    source: 'claude', createdAt: now, history: [{ at: now, by: 'claude', text: 'Tâche proposée dans le chat Juridique' }], decision: '', contactId: null, cost: 0,
+  });
+  saveChatMessage({ ...m, taskDone: true });
+  toast('Ajoutée à la To do');
+}
+
+const RULES_JURIDIQUE = `Tu es l'assistant juridique et administratif de Sébastien pour son meublé de tourisme Horizon Blanc 403 (La Joue du Loup, Le Dévoluy ; LMNP au réel simplifié ; meublé de tourisme non classé déclaré en mairie ; conciergerie Concierge Services En Dévoluy ; syndic LOGEVAC ; assurance Pacifica). Réponds en français, court et factuel, sans formules de politesse. Explique la démarche concrète, étape par étape, avec les délais et les coordonnées utiles tirées du contexte. Dis clairement quand un point mérite l'avis d'un professionnel (notaire, avocat, CGP) et quand tu n'es pas sûr. Contredis-le s'il se trompe. N'invente pas de texte de loi ni de délai : si tu n'es pas certain, dis-le.
+Pour un courrier ou un contrat en photo : résume-le, dis ce qu'il implique, ce qu'il faut faire et avant quand.
+Quand une démarche doit être ajoutée à sa To do, termine ta réponse par :
+\`\`\`tache
+{"title": "verbe + objet", "kind": "admin", "priority": "normale", "date": "AAAA-MM-JJ ou chaîne vide", "notes": "démarche en 3 à 6 lignes"}
+\`\`\`
+(kind : "decision" si un choix est à faire ; priority "haute" si une échéance tombe sous 15 jours).`;
+
+function contextJuridique() {
+  const sections = (db().property?.sections || []).map((s) => `## ${s.title}\n${s.body}`).join('\n\n').slice(0, 12000);
+  const docs = db().documents.map((d) => `${d.name} | ${d.status} | ${d.ref || ''} | ${d.date || ''} | ${d.expiry || ''}`).join('\n');
+  const dl = db().deadlines.filter((d) => !d.done).map((d) => `${d.date} ${d.title}`).join('\n');
+  return `Date du jour : ${today()}.\nFiche du bien :\n${sections}\n\nDocuments suivis :\n${docs}\n\nÉchéances :\n${dl}`;
+}
+
 function acceptBank(id) {
   const m = (db().chat || []).find((x) => x.id === id);
   if (!m?.bankLines?.length) return;
@@ -550,7 +591,7 @@ function acceptBank(id) {
   toast(n ? `${n} ligne${n > 1 ? 's' : ''} ajoutée${n > 1 ? 's' : ''} dans Banque (à rapprocher)` : 'Ces lignes étaient déjà dans Banque.');
 }
 
-async function send(body, text) {
+async function send(body, text, thread = 'compta') {
   const sample = await getSample();
   if (!sample) return;
   const files = chat.files.splice(0);
@@ -558,35 +599,35 @@ async function send(body, text) {
   chat.draft = '';
   chat.live = '';
   chat.ctl = new AbortController();
-  renderChat(body);
+  renderChat(body, thread);
   const attachments = [];
   for (const f of files) {
-    const a = await uploadFile(f);
+    const a = await archiveFile(f, { folder: 'À classer', origin: `Chat ${chat.thread}` });
     if (a) attachments.push(a);
   }
   const images = files.filter((f) => f.type.startsWith('image/'));
   const pdfs = files.filter((f) => !f.type.startsWith('image/')).map((f) => f.name);
   const userText = text || (images.length ? 'Pièce jointe.' : 'Document joint.');
-  saveChatMessage({ role: 'user', text: userText, at: new Date().toISOString(), attachments });
-  const history = (db().chat || []).slice(-16).map((m) => ({
+  saveChatMessage({ role: 'user', text: userText, at: new Date().toISOString(), attachments, thread });
+  const history = threadMsgs(thread).slice(-16).map((m) => ({
     role: m.role === 'user' ? 'user' : 'assistant',
     content: (m.text || '…') + (m.attachments?.length ? ` [${m.attachments.length} pièce(s) jointe(s)]` : ''),
   }));
   if (pdfs.length) history[history.length - 1].content += ` (PDF joint, non lisible ici : ${pdfs.join(', ')})`;
-  const input = [{ role: 'user', content: `${RULES}\n\nContexte :\n${context()}` }, ...history];
+  const input = [{ role: 'user', content: thread === 'compta' ? `${RULES}\n\nContexte :\n${context()}` : `${RULES_JURIDIQUE}\n\nContexte :\n${contextJuridique()}` }, ...history];
   if (input[1]?.role === 'assistant') input.splice(1, 0, { role: 'user', content: '(suite de la conversation)' });
   const lim = images.length ? await sample.limits().catch(() => null) : null;
   try {
     const opts = { cache: false, signal: chat.ctl.signal, onText: ({ text: t }) => { chat.live = t; const live = body.querySelector('#chat-live'); if (live) { live.textContent = t; live.classList.remove('thinking'); } } };
     if (images.length && lim?.images) opts.images = images.slice(0, lim.images.maxCount);
     const { text: answer } = await sample(input, opts);
-    const { text: shown, proposal, bankLines } = parseBlocks(answer);
-    saveChatMessage({ role: 'assistant', text: shown, at: new Date().toISOString(), proposal, bankLines });
+    const { text: shown, proposal, bankLines, task } = parseBlocks(answer);
+    saveChatMessage({ role: 'assistant', text: shown, at: new Date().toISOString(), proposal, bankLines, task, thread });
   } catch (e) {
-    if (e.code !== 'cancelled') saveChatMessage({ role: 'assistant', text: `${e.text ? `${e.text}\n\n` : ''}⚠︎ ${ERRORS[e.code] || 'Réponse interrompue. Réessayez.'}`, at: new Date().toISOString() });
+    if (e.code !== 'cancelled') saveChatMessage({ role: 'assistant', text: `${e.text ? `${e.text}\n\n` : ''}⚠︎ ${ERRORS[e.code] || 'Réponse interrompue. Réessayez.'}`, at: new Date().toISOString(), thread });
   } finally {
     chat.busy = false;
     chat.live = '';
-    renderChat(body);
+    renderChat(body, thread);
   }
 }

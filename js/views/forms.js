@@ -5,7 +5,8 @@ import {
   EXPENSE_ACCOUNTS, CONTACT_KINDS, overlaps, findContactByName, sortedContacts, resNights, resNet,
   conciergeCost, computeTax, taxByMe,
 } from '../store.js';
-import { field, row, openSheet, toast, ask, uploadFile, attachmentLinks } from '../ui.js';
+import { field, row, openSheet, toast, ask, attachmentLinks } from '../ui.js';
+import { archiveFile, linkVault } from '../vault.js';
 
 const opts = (obj) => Object.entries(obj).map(([value, label]) => ({ value, label }));
 const WEEKDAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -218,7 +219,7 @@ export function expenseForm(existing, preset = null, onSaved = null) {
         const f = ev.target.files?.[0];
         if (!f) return;
         toast('Archivage…');
-        const a = await uploadFile(f);
+        const a = await archiveFile(f, { folder: 'Compta/Factures', origin: 'Dépense' });
         if (!a) return;
         attachments.push(a);
         dlg.querySelector('[data-attach]').innerHTML = attachmentLinks(attachments);
@@ -233,6 +234,7 @@ export function expenseForm(existing, preset = null, onSaved = null) {
         attachments,
         ...(preset?.source ? { source: preset.source, sourceLink: preset.sourceLink || '' } : {}),
       });
+      linkVault(attachments, { coll: 'expenses', id: saved.id });
       onSaved?.(saved);
       toast(existing ? 'Dépense mise à jour' : 'Dépense ajoutée');
     },
